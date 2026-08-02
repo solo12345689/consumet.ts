@@ -5,7 +5,7 @@ class Kwik extends VideoExtractor {
   protected override serverName = 'kwik';
   protected override sources: IVideo[] = [];
 
-  private readonly baseUrl = 'https://animepahe.si/';
+  private readonly baseUrl = 'https://animepahe.org/';
   private readonly safelinkBaseUrl = 'https://pahe.win/';
 
   override extract = async (videoUrl: URL): Promise<IVideo[]> => {

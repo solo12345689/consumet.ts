@@ -36,7 +36,7 @@ import {
   getDays,
   capitalizeFirstLetter,
 } from '../../utils';
-import Hianime from '../anime/hianime';
+import AniKoto from '../anime/anikoto';
 import { compareTwoStrings, findSimilarTitles, getHashFromImage, USER_AGENT } from '../../utils/utils';
 import { anilistFavouritesQuery } from '../../utils/queries';
 import MangaDex from '../manga/mangadex';
@@ -63,7 +63,7 @@ class Anilist extends AnimeParser {
    */
   constructor(provider?: AnimeParser, public proxyConfig?: ProxyConfig, adapter?: AxiosAdapter) {
     super(proxyConfig, adapter);
-    this.provider = provider || new Hianime();
+    this.provider = provider || new AniKoto();
   }
 
   /**
@@ -698,7 +698,7 @@ class Anilist extends AnimeParser {
         rating: item.node.meanScore,
       }));
       if (
-        this.provider instanceof Hianime &&
+        this.provider instanceof AniKoto &&
         !dub &&
         (animeInfo.status === MediaStatus.ONGOING ||
           range({ from: 1940, to: new Date().getFullYear() + 1 }).includes(parseInt(animeInfo.releaseDate!)))
@@ -708,7 +708,7 @@ class Anilist extends AnimeParser {
           // const anifyInfo = await new Anify(
           //   this.proxyConfig,
           //   this.adapter,
-          //   this.provider.name.toLowerCase() as 'gogoanime' | 'Hianime' | 'animepahe' | '9anime'
+          //   this.provider.name.toLowerCase() as 'gogoanime' | 'AniKoto' | 'animepahe' | '9anime'
           // ).fetchAnimeInfo(id);
           // animeInfo.mappings = anifyInfo.mappings;
           // animeInfo.artwork = anifyInfo.artwork;
@@ -927,7 +927,7 @@ class Anilist extends AnimeParser {
       return undefined;
     }
 
-    if (this.provider instanceof Hianime) {
+    if (this.provider instanceof AniKoto) {
       // Set the correct episode sub/dub request type
       possibleAnime.episodes.forEach((_: any, index: number) => {
         if (possibleAnime.subOrDub === SubOrSub.BOTH) {
@@ -1415,12 +1415,12 @@ class Anilist extends AnimeParser {
   };
 
   /**
-   * @param provider The provider to get the episode Ids from (optional) default: `gogoanime` (options: `gogoanime`, `Hianime`)
+   * @param provider The provider to get the episode Ids from (optional) default: `gogoanime` (options: `gogoanime`, `AniKoto`)
    * @param page page number (optional)
    * @param perPage number of results per page (optional)
    */
   fetchRecentEpisodes = async (
-    provider: 'gogoanime' | 'Hianime' = 'gogoanime',
+    provider: 'gogoanime' | 'AniKoto' = 'gogoanime',
     page: number = 1,
     perPage: number = 25
   ): Promise<ISearch<IAnimeResult>> => {
@@ -1516,7 +1516,7 @@ class Anilist extends AnimeParser {
     let possibleAnimeEpisodes: IAnimeEpisode[] = [];
     let fillerEpisodes: { number: string; 'filler-bool': boolean }[] = [];
     if (
-      this.provider instanceof Hianime &&
+      this.provider instanceof AniKoto &&
       !dub &&
       (Media.status === 'RELEASING' ||
         range({ from: 2000, to: new Date().getFullYear() + 1 }).includes(parseInt(Media.startDate?.year!)))
@@ -1526,7 +1526,7 @@ class Anilist extends AnimeParser {
         // possibleAnimeEpisodes = (
         //   await new Anify().fetchAnimeInfoByAnilistId(
         //     id,
-        //     this.provider.name.toLowerCase() as 'gogoanime' | 'Hianime'
+        //     this.provider.name.toLowerCase() as 'gogoanime' | 'AniKoto'
         //   )
         // ).episodes?.map((item: any) => ({
         //   id: item.slug,
@@ -2440,7 +2440,7 @@ class Anilist extends AnimeParser {
 }
 
 // (async () => {
-//   const ani = new Anilist(new Hianime());
+//   const ani = new Anilist(new AniKoto());
 //   const anime = await ani.advancedSearch(undefined, "MANGA", undefined, undefined, undefined, ["POPULARITY_DESC"], undefined, undefined, undefined, undefined, undefined, "KR");
 //   console.log(anime.results[0].title);
 //   const details = await ani.fetchAnimeInfo(anime.results[0].id);

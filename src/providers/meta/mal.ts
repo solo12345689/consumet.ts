@@ -13,7 +13,7 @@ import {
   MediaFormat,
 } from '../../models';
 import { substringAfter, substringBefore, compareTwoStrings, kitsuSearchQuery, range } from '../../utils';
-import Hianime from '../anime/hianime';
+import AniKoto from '../anime/anikoto';
 
 class Myanimelist extends AnimeParser {
   override readonly name = 'Myanimelist';
@@ -35,7 +35,7 @@ class Myanimelist extends AnimeParser {
    */
   constructor(provider?: AnimeParser) {
     super();
-    this.provider = provider || new Hianime();
+    this.provider = provider || new AniKoto();
   }
 
   private malStatusToMediaStatus(status: string): MediaStatus {
@@ -181,7 +181,7 @@ class Myanimelist extends AnimeParser {
       };
       let fillerEpisodes: { number: string; 'filler-bool': boolean }[];
       if (
-        this.provider instanceof Hianime &&
+        this.provider instanceof AniKoto &&
         !dub &&
         (animeInfo.status === MediaStatus.ONGOING ||
           range({ from: 2000, to: new Date().getFullYear() + 1 }).includes(animeInfo.startDate?.year!))
@@ -192,7 +192,7 @@ class Myanimelist extends AnimeParser {
           //   await new Anify(
           //     this.proxyConfig,
           //     this.adapter,
-          //     this.provider.name.toLowerCase() as 'gogoanime' | 'Hianime' | '9anime' | 'animepahe'
+          //     this.provider.name.toLowerCase() as 'gogoanime' | 'AniKoto' | '9anime' | 'animepahe'
           //   ).fetchAnimeInfo(animeId)
           // ).episodes?.map((item: any) => ({
           //   id: item.slug,
@@ -336,7 +336,7 @@ class Myanimelist extends AnimeParser {
       return [];
     }
 
-    if (this.provider instanceof Hianime) {
+    if (this.provider instanceof AniKoto) {
       // Set the correct episode sub/dub request type
       possibleAnime.episodes.forEach((_: any, index: number) => {
         if (possibleAnime.subOrDub === SubOrSub.BOTH) {

@@ -3,11 +3,10 @@ import { ANIME, MANGA, BOOKS, COMICS, LIGHT_NOVELS, MOVIES, META, NEWS } from '.
 // List of providers
 export const PROVIDERS_LIST = {
   ANIME: [
-    new ANIME.AnimePahe(),
-    new ANIME.Hianime(),
+    new ANIME.AniKoto(),
     new ANIME.AnimeKai(),
-    new ANIME.AnimeUnity(),
-    new ANIME.KickAssAnime(),
+    new ANIME.AnimeWorld(),
+    new ANIME.GogoAnime(),
     new ANIME.AnimeSaturn(),
   ],
   MANGA: [

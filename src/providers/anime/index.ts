@@ -1,17 +1,15 @@
-import AnimePahe from './animepahe';
-import Hianime from './hianime';
+import AniKoto from './anikoto';
 import AnimeSaturn from './animesaturn';
 import AnimeKai from './animekai';
-import KickAssAnime from './kickassanime';
-import AnimeUnity from './animeunity';
+import GogoAnime from './gogoanime';
+import AnimeWorld from './animeworld';
 import AnimeSama from './animesama';
 
 export default {
-  Hianime,
-  AnimePahe,
+  AniKoto,
   AnimeKai,
-  KickAssAnime,
+  GogoAnime,
   AnimeSaturn,
-  AnimeUnity,
+  AnimeWorld,
   AnimeSama,
 };

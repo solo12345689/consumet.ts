@@ -1,4 +1,6 @@
 import { load } from 'cheerio';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import axios from 'axios';
 
 import {
   AnimeParser,
@@ -8,13 +10,85 @@ import {
   ISource,
   IAnimeEpisode,
   IEpisodeServer,
+  ProxyConfig,
 } from '../../models';
+import { AxiosAdapter } from 'axios';
 
 class AnimeSaturn extends AnimeParser {
   override readonly name = 'AnimeSaturn';
   protected override baseUrl = 'https://www.animesaturn.cx/';
   protected override logo = 'https://www.animesaturn.cx/immagini/favicon-32x32.png';
   protected override classPath = 'ANIME.AnimeSaturn';
+  public cookie: string = process.env.ANIMEUNITY_COOKIE || '';
+
+  constructor(proxyConfig?: ProxyConfig, adapter?: AxiosAdapter) {
+    super(proxyConfig, adapter);
+    this.client.defaults.httpsAgent = new (require('https').Agent)({ rejectUnauthorized: false });
+  }
+
+  private activeProxyAgent: HttpsProxyAgent | null = null;
+
+  /**
+   * Fetches an active proxy from ProxyScrape and returns an HttpsProxyAgent
+   */
+  private async getProxyAgent(): Promise<HttpsProxyAgent | null> {
+    if (this.activeProxyAgent) return this.activeProxyAgent;
+    try {
+      const res = await axios.get('https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=yes&anonymity=anonymous', { timeout: 6000 });
+      const proxies = res.data.split('\r\n').filter(Boolean);
+      if (proxies.length > 0) {
+        const selectedProxy = proxies[Math.floor(Math.random() * Math.min(proxies.length, 10))];
+        this.activeProxyAgent = new HttpsProxyAgent(`http://${selectedProxy}`);
+        return this.activeProxyAgent;
+      }
+    } catch (e) {
+      // Fallback if proxy retrieval fails
+    }
+    return null;
+  }
+
+  /**
+   * Safe request wrapper that tries via Proxy if direct requests fail
+   */
+  private async requestSafe(url: string, config: any = {}): Promise<any> {
+    try {
+      // First try direct connection
+      const directConfig = { ...config };
+      if (!directConfig.httpsAgent) {
+        directConfig.httpsAgent = new (require('https').Agent)({ rejectUnauthorized: false });
+      }
+      return await this.client.get(url, directConfig);
+    } catch (err: any) {
+      if (err.response?.status === 502 || err.code === 'ECONNRESET' || err.response?.status === 403 || err.message.includes('timeout') || err.message.includes('certificate')) {
+        // Fetch/use proxy agent
+        const agent = await this.getProxyAgent();
+        if (agent) {
+          try {
+            // Disable strict SSL checks inside the proxy requests too
+            const httpsAgent = new HttpsProxyAgent(`http://${(agent as any).proxy.host}:${(agent as any).proxy.port}`) as any;
+            httpsAgent.rejectUnauthorized = false;
+            
+            return await axios.get(url, {
+              ...config,
+              httpAgent: agent,
+              httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
+              proxy: {
+                host: (agent as any).proxy.host,
+                port: parseInt((agent as any).proxy.port),
+              },
+              timeout: 10000,
+            });
+          } catch (proxyErr) {
+            // If proxy fails, clear active agent to fetch a new one next time
+            this.activeProxyAgent = null;
+            throw proxyErr;
+          }
+        }
+      }
+      console.error('AnimeSaturn direct request failed:', err.message);
+      throw err;
+    }
+  }
 
   /**
    * Search for anime
@@ -22,7 +96,7 @@ class AnimeSaturn extends AnimeParser {
    * @returns Promise<ISearch<IAnimeResult>>
    */
   override search = async (query: string): Promise<ISearch<IAnimeResult>> => {
-    const data = await this.client.get(`${this.baseUrl}animelist?search=${query}`);
+    const data = await this.requestSafe(`${this.baseUrl}filter?key=${query}`);
 
     const $ = await load(data.data);
 
@@ -36,19 +110,18 @@ class AnimeSaturn extends AnimeParser {
       results: [],
     };
 
-    $('ul.list-group li').each((i, element) => {
+    $('a.ac.group').each((i, element) => {
       const item: IAnimeResult = {
-        id: $(element)?.find('a.thumb')?.attr('href')?.split('/')?.pop() ?? '',
-        title: $(element)?.find('h3 a')?.text(),
-        image: $(element)?.find('img.copertina-archivio')?.attr('src'),
-        url: $(element)?.find('h3 a')?.attr('href'),
+        id: $(element).attr('href')?.split('/')?.pop() ?? '',
+        title: $(element).find('h3.ac__title').text().trim(),
+        image: $(element).find('img').attr('src'),
+        url: `${this.baseUrl}anime/${$(element).attr('href')?.split('/')?.pop()}`,
       };
 
-      if (!item.id) throw new Error('Invalid id');
+      if (!item.id) return;
 
       res.results.push(item);
     });
-
     return res;
   };
 
@@ -58,7 +131,7 @@ class AnimeSaturn extends AnimeParser {
    * @returns Promise<IAnimeInfo>
    */
   override fetchAnimeInfo = async (id: string): Promise<IAnimeInfo> => {
-    const data = await this.client.get(`${this.baseUrl}anime/${id}`);
+    const data = await this.requestSafe(`${this.baseUrl}anime/${id}`);
     const $ = await load(data.data);
 
     const info: IAnimeInfo = {
@@ -108,7 +181,7 @@ class AnimeSaturn extends AnimeParser {
    * @returns Promise<ISource>
    */
   override fetchEpisodeSources = async (episodeId: string): Promise<ISource> => {
-    const episodeData = await this.client.get(`${this.baseUrl}ep/${episodeId}`, {
+    const episodeData = await this.requestSafe(`${this.baseUrl}ep/${episodeId}`, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0',
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -139,7 +212,7 @@ class AnimeSaturn extends AnimeParser {
       throw new Error('Watch URL not found');
     }
 
-    const watchData = await this.client.get(watchUrl, {
+    const watchData = await this.requestSafe(watchUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0',
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
