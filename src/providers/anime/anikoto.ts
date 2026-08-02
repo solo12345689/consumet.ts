@@ -655,6 +655,15 @@ class AniKoto extends AnimeParser {
     try {
       let embedUrl = '';
       let linkId = episodeId;
+      
+      // Convert standard /ep-X or watch/ep-X formats into the internal watchSlug$episode$epNum format
+      if (!episodeId.includes('$episode$') && episodeId.includes('/ep-')) {
+        const parts = episodeId.split('/ep-');
+        const watchSlug = parts[0].split('/').pop() || parts[0];
+        const epNum = parts[1].split('?')[0];
+        episodeId = `${watchSlug}$episode$${epNum}`;
+      }
+
       if (episodeId.includes('$episode$')) {
         const watchSlug = episodeId.split('$episode$')[0];
         const epNum = episodeId.split('$episode$')[1];
@@ -886,9 +895,12 @@ class AniKoto extends AnimeParser {
             return;
           }
 
-          const id = href.split('/watch/').pop()?.split('?')[0] || href.split('/')[1]?.split('?')[0];
+          let id = href.split('/watch/').pop()?.split('?')[0] || href.split('/')[1]?.split('?')[0];
           if (!id) {
             return;
+          }
+          if (id.includes('/ep-')) {
+            id = id.split('/ep-')[0];
           }
 
           const title = card.find('.film-name a, a.name.d-title, .name a').first().text().trim() || card.find('img').attr('alt') || '';
