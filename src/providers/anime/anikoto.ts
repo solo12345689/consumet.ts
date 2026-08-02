@@ -269,6 +269,12 @@ class AniKoto extends AnimeParser {
    */
   async fetchDownloadLinks(episodeId: string): Promise<{ downloadUrl: string }> {
     try {
+      const sources = await this.fetchEpisodeSources(episodeId);
+      const m3u8Url = sources.sources?.[0]?.url;
+      if (m3u8Url) {
+        return { downloadUrl: m3u8Url };
+      }
+      
       const watchSlug = episodeId.split('$episode$')[0];
       const epNum = episodeId.split('$episode$')[1] || '1';
       const watchUrl = `${this.baseUrl}/watch/${watchSlug}/ep-${epNum}`;
