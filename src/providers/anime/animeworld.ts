@@ -21,7 +21,7 @@ class AnimeWorld extends AnimeParser {
   protected override logo = 'https://www.animeworld.so/assets/images/favicon/favicon.png';
   protected override classPath = 'ANIME.AnimeWorld';
 
-  private activeProxyAgent: HttpsProxyAgent | null = null;
+  private activeProxyAgent: any = null;
 
   constructor(proxyConfig?: ProxyConfig, adapter?: AxiosAdapter) {
     super(proxyConfig, adapter);
@@ -31,7 +31,7 @@ class AnimeWorld extends AnimeParser {
   /**
    * Fetches an active proxy from ProxyScrape and returns an HttpsProxyAgent
    */
-  private async getProxyAgent(): Promise<HttpsProxyAgent | null> {
+  private async getProxyAgent(): Promise<any> {
     if (this.activeProxyAgent) return this.activeProxyAgent;
     try {
       const res = await axios.get('https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=yes&anonymity=anonymous', { timeout: 6000 });
