@@ -188,11 +188,11 @@ class AniKoto extends AnimeParser {
   }
   fetchSubbedAnime(page: number = 1): Promise<ISearch<IAnimeResult>> {
     if (0 >= page) page = 1;
-    return this.scrapeCardPage(`${this.baseUrl}/filter?language=sub&page=${page}`);
+    return this.scrapeCardPage(`${this.baseUrl}/filter?lang=sub&page=${page}`);
   }
   fetchDubbedAnime(page: number = 1): Promise<ISearch<IAnimeResult>> {
     if (0 >= page) page = 1;
-    return this.scrapeCardPage(`${this.baseUrl}/filter?language=dub&page=${page}`);
+    return this.scrapeCardPage(`${this.baseUrl}/filter?lang=dub&page=${page}`);
   }
   fetchMovie(page: number = 1): Promise<ISearch<IAnimeResult>> {
     if (0 >= page) page = 1;
@@ -246,17 +246,23 @@ class AniKoto extends AnimeParser {
 
       $('#w-related .item, .w-side-section .item').each((i: number, el: any) => {
         const card = $(el);
-        const aTag = card.find('a').first();
-        const href = aTag.attr('href');
-        const relId = href?.split('/watch/').pop() || href?.split('/')[1]?.split('?')[0];
-        if (relId) {
-          related.push({
-            id: relId,
-            title: card.find('.name, a.name').text().trim() || aTag.text().trim(),
-            url: `${this.baseUrl}${href?.startsWith('/') ? href : '/' + href}`,
-            image: card.find('img')?.attr('src') || card.find('img')?.attr('data-src'),
-            type: card.find('.relation, .serieslabelitem')?.text()?.trim() as MediaFormat,
-          });
+        let aTag: any = card.find('a').first();
+        let href = aTag.attr('href');
+        if (!href) {
+          aTag = card.closest('a') as any;
+          href = aTag.attr('href');
+        }
+        if (href) {
+          const relId = href.split('/watch/').pop() || href.split('/')[1]?.split('?')[0];
+          if (relId) {
+            related.push({
+              id: relId,
+              title: card.find('.name, a.name').text().trim() || card.find('img').attr('alt') || aTag.text().trim(),
+              url: href.startsWith('http') ? href : `${this.baseUrl}${href.startsWith('/') ? href : '/' + href}`,
+              image: card.find('img')?.attr('src') || card.find('img')?.attr('data-src'),
+              type: card.find('.relation, .serieslabelitem, .meta .dot').eq(1)?.text()?.trim() as MediaFormat,
+            });
+          }
         }
       });
       return related;
@@ -267,18 +273,24 @@ class AniKoto extends AnimeParser {
   /**
    * @param episodeId Episode ID or slug
    */
-  async fetchDownloadLinks(episodeId: string): Promise<{ downloadUrl: string }> {
+  async fetchDownloadLinks(episodeId: string): Promise<{ downloadUrl: string; headers?: Record<string, string> }> {
     try {
       const sources = await this.fetchEpisodeSources(episodeId);
       const m3u8Url = sources.sources?.[0]?.url;
       if (m3u8Url) {
-        return { downloadUrl: m3u8Url };
+        return {
+          downloadUrl: m3u8Url,
+          headers: sources.headers || { Referer: 'https://megaplay.buzz/' }
+        };
       }
       
       const watchSlug = episodeId.split('$episode$')[0];
       const epNum = episodeId.split('$episode$')[1] || '1';
       const watchUrl = `${this.baseUrl}/watch/${watchSlug}/ep-${epNum}`;
-      return { downloadUrl: watchUrl };
+      return {
+        downloadUrl: watchUrl,
+        headers: { Referer: this.baseUrl }
+      };
     } catch (err) {
       throw new Error('Download link not found');
     }
@@ -302,10 +314,11 @@ class AniKoto extends AnimeParser {
       const { data } = await this.client.get(`${this.baseUrl}/home`);
       const $ = load(data);
 
-      const sideBar = $('#main-sidebar');
-      sideBar.find('ul.sb-genre-list li a').each((i, ele) => {
-        const genres = $(ele);
-        res.push(genres.text().toLowerCase());
+      $('a[href*="/genre/"]').each((i, ele) => {
+        const genre = $(ele).text().trim().toLowerCase();
+        if (genre && genre !== 'unknown' && !res.includes(genre)) {
+          res.push(genre);
+        }
       });
 
       return res;
@@ -329,21 +342,25 @@ class AniKoto extends AnimeParser {
   async fetchSchedule(date: string = new Date().toISOString().slice(0, 10)): Promise<ISearch<IAnimeResult>> {
     try {
       const res: ISearch<IAnimeResult> = { results: [] };
-      const { data } = await this.client.get(`${this.baseUrl}/schedule?date=${date}`);
-      const $ = load(data);
+      const timestamp = Math.floor(new Date(`${date}T00:00:00Z`).getTime() / 1000);
+      const { data } = await this.client.get(`${this.baseUrl}/ajax/schedule/date?tz=5.5&time=${timestamp}`, {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+      });
+      const htmlContent = data.result || data.html || data;
+      const $ = load(htmlContent);
 
-      $('.schedule-item, ul.schedule-list li, .item').each((i: number, ele: any) => {
+      $('a.item, .schedule-item, ul.schedule-list li').each((i: number, ele: any) => {
         const card = $(ele);
-        const aTag = card.find('a.name, .film-name a, a').first();
+        const aTag = card.is('a') ? card : card.find('a.name, .film-name a, a').first();
         const href = aTag.attr('href') || '';
         const id = href.split('/watch/').pop() || href.split('/')[1]?.split('?')[0];
 
         if (id) {
           res.results.push({
             id: id,
-            title: aTag.text().trim(),
-            japaneseTitle: aTag.attr('data-jp') || aTag.attr('data-jname'),
-            url: `${this.baseUrl}${href.startsWith('/') ? href : '/' + href}`,
+            title: card.find('.title').text().trim() || aTag.text().trim(),
+            japaneseTitle: card.find('.title').attr('data-jp') || aTag.attr('data-jp') || aTag.attr('data-jname'),
+            url: href.startsWith('http') ? href : `${this.baseUrl}${href.startsWith('/') ? href : '/' + href}`,
             airingEpisode: card.find('.ep, .episode').text().trim(),
             airingTime: card.find('.time').text().trim(),
           });
