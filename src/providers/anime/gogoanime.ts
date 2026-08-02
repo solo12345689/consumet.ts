@@ -154,9 +154,9 @@ class GogoAnime extends AnimeParser {
       const maxEpisodes = parts.length > 1 ? parseInt(parts[1]) : 1;
 
       // Extract all relative episode links dynamically matching the pattern
-      $('a').each((_, el) => {
+      $('#episode_related a').each((_, el) => {
         const href = $(el).attr('href') || '';
-        if (href.startsWith(`/${id}-episode-`)) {
+        if (href.includes('-episode-')) {
           const epNum = href.split('-episode-').pop() || '1';
           episodes.push({
             id: href.substring(1),
