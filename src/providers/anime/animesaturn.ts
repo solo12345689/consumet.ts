@@ -28,9 +28,6 @@ class AnimeSaturn extends AnimeParser {
 
   private activeProxyAgent: any = null;
 
-  /**
-   * Fetches an active proxy from ProxyScrape and returns an HttpsProxyAgent
-   */
   private async getProxyAgent(): Promise<any> {
     if (this.activeProxyAgent) return this.activeProxyAgent;
     try {
@@ -38,7 +35,12 @@ class AnimeSaturn extends AnimeParser {
       const proxies = res.data.split('\r\n').filter(Boolean);
       if (proxies.length > 0) {
         const selectedProxy = proxies[Math.floor(Math.random() * Math.min(proxies.length, 10))];
-        this.activeProxyAgent = new HttpsProxyAgent(`http://${selectedProxy}`);
+        const [host, port] = selectedProxy.split(':');
+        this.activeProxyAgent = {
+          agent: new HttpsProxyAgent(`http://${selectedProxy}`),
+          host,
+          port: parseInt(port)
+        };
         return this.activeProxyAgent;
       }
     } catch (e) {
@@ -61,20 +63,16 @@ class AnimeSaturn extends AnimeParser {
     } catch (err: any) {
       if (err.response?.status === 502 || err.code === 'ECONNRESET' || err.response?.status === 403 || err.message.includes('timeout') || err.message.includes('certificate')) {
         // Fetch/use proxy agent
-        const agent = await this.getProxyAgent();
-        if (agent) {
+        const proxyInfo = await this.getProxyAgent();
+        if (proxyInfo) {
           try {
-            // Disable strict SSL checks inside the proxy requests too
-            const httpsAgent = new HttpsProxyAgent(`http://${(agent as any).proxy.host}:${(agent as any).proxy.port}`) as any;
-            httpsAgent.rejectUnauthorized = false;
-            
             return await axios.get(url, {
               ...config,
-              httpAgent: agent,
+              httpAgent: proxyInfo.agent,
               httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
               proxy: {
-                host: (agent as any).proxy.host,
-                port: parseInt((agent as any).proxy.port),
+                host: proxyInfo.host,
+                port: proxyInfo.port,
               },
               timeout: 10000,
             });

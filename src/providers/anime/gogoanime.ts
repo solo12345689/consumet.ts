@@ -27,9 +27,6 @@ class GogoAnime extends AnimeParser {
 
   private activeProxyAgent: any = null;
 
-  /**
-   * Fetches an active proxy from ProxyScrape and returns an HttpsProxyAgent
-   */
   private async getProxyAgent(): Promise<any> {
     if (this.activeProxyAgent) return this.activeProxyAgent;
     try {
@@ -37,7 +34,12 @@ class GogoAnime extends AnimeParser {
       const proxies = res.data.split('\r\n').filter(Boolean);
       if (proxies.length > 0) {
         const selectedProxy = proxies[Math.floor(Math.random() * Math.min(proxies.length, 10))];
-        this.activeProxyAgent = new HttpsProxyAgent(`http://${selectedProxy}`);
+        const [host, port] = selectedProxy.split(':');
+        this.activeProxyAgent = {
+          agent: new HttpsProxyAgent(`http://${selectedProxy}`),
+          host,
+          port: parseInt(port)
+        };
         return this.activeProxyAgent;
       }
     } catch (e) {
@@ -61,8 +63,8 @@ class GogoAnime extends AnimeParser {
         this.activeProxyAgent = null;
         let lastError = err;
         for (let attempt = 0; attempt < 5; attempt++) {
-          const agent = await this.getProxyAgent();
-          if (agent) {
+          const proxyInfo = await this.getProxyAgent();
+          if (proxyInfo) {
             try {
               return await axios.get(url, {
                 ...config,
@@ -71,11 +73,11 @@ class GogoAnime extends AnimeParser {
                   'Referer': config.headers?.referer || `${this.baseUrl}/`,
                   'User-Agent': USER_AGENT,
                 },
-                httpAgent: agent,
+                httpAgent: proxyInfo.agent,
                 httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
                 proxy: {
-                  host: (agent as any).proxy.host,
-                  port: parseInt((agent as any).proxy.port),
+                  host: proxyInfo.host,
+                  port: proxyInfo.port,
                 },
                 timeout: 8000,
               });
