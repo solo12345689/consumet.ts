@@ -653,6 +653,7 @@ class AniKoto extends AnimeParser {
     }
 
     try {
+      let embedUrl = '';
       let linkId = episodeId;
       if (episodeId.includes('$episode$')) {
         const watchSlug = episodeId.split('$episode$')[0];
@@ -674,31 +675,45 @@ class AniKoto extends AnimeParser {
             const targetAAlt = allA.eq(parseInt(epNum) - 1);
             linkId = targetAAlt.attr('data-id') || targetAAlt.attr('data-ids') || linkId;
           } else {
-            const epDataId = targetA.attr('data-id') || targetA.attr('data-ids') || '';
-            if (epDataId) {
-              const serverRes = await this.client.get(`${this.baseUrl}/ajax/server/list?servers=${epDataId}`, {
+            const epDataIds = targetA.attr('data-ids') || targetA.attr('data-id') || '';
+            if (epDataIds) {
+              const serverRes = await this.client.get(`${this.baseUrl}/ajax/server/list?servers=${encodeURIComponent(epDataIds)}`, {
                 headers: { 'X-Requested-With': 'XMLHttpRequest' }
               });
               const serverHtml = typeof serverRes.data === 'string' ? serverRes.data : (serverRes.data?.result || '');
               const $$$ = load(serverHtml);
-              linkId = $$$('li[data-link-id]').first().attr('data-link-id') || epDataId;
+              
+              // We must parse the li elements to resolve the source embed token
+              const serverLi = $$$('li[data-link-id]').first();
+              const embedLinkId = serverLi.attr('data-link-id') || '';
+              const svId = serverLi.attr('data-sv-id') || '';
+              
+              if (embedLinkId) {
+                const svParam = svId ? `&sv=${svId}` : '';
+                const { data: rawEmbed } = await this.client.get(`${this.baseUrl}/ajax/server?get=${encodeURIComponent(embedLinkId)}${svParam}`, {
+                  headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                });
+                const resObj = typeof rawEmbed === 'string' ? JSON.parse(rawEmbed) : rawEmbed;
+                embedUrl = resObj?.result?.url || resObj?.url || resObj?.link || '';
+              }
             }
           }
         }
       }
 
-      let embedUrl = '';
-      try {
-        const { data: raw } = await this.client.get(`${this.baseUrl}/ajax/server?get=${linkId}`, {
-          headers: { 'X-Requested-With': 'XMLHttpRequest' }
-        });
+      if (!embedUrl && linkId) {
+        try {
+          const { data: raw } = await this.client.get(`${this.baseUrl}/ajax/server?get=${linkId}`, {
+            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+          });
 
-        let resObj = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        if (typeof resObj.result === 'string') {
-          try { resObj.result = JSON.parse(resObj.result); } catch (e) {}
-        }
-        embedUrl = resObj?.result?.url || resObj?.url || resObj?.link || '';
-      } catch (err) {}
+          let resObj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          if (typeof resObj.result === 'string') {
+            try { resObj.result = JSON.parse(resObj.result); } catch (e) {}
+          }
+          embedUrl = resObj?.result?.url || resObj?.url || resObj?.link || '';
+        } catch (err) {}
+      }
 
       if (!embedUrl) {
         if (episodeId.includes('$episode$')) {
@@ -726,15 +741,15 @@ class AniKoto extends AnimeParser {
 
           if (dataId) {
             const embedDomain = new URL(embedUrl).hostname;
-            const apiDomain = embedDomain.includes('vidtube') || embedDomain.includes('vidplay') ? 'megaplay-1.buzz' : embedDomain;
-            const apiRes = await this.client.get(`https://${apiDomain}/ajax/sources/${dataId}`, {
+            const apiRes = await this.client.get(`https://${embedDomain}/stream/getSources?id=${encodeURIComponent(dataId)}`, {
               headers: {
                 Referer: embedUrl,
-                Origin: `https://${embedDomain}`
+                Origin: `https://${embedDomain}`,
+                'X-Requested-With': 'XMLHttpRequest'
               }
             });
             const apiData = typeof apiRes.data === 'string' ? JSON.parse(apiRes.data) : apiRes.data;
-            const finalStreamUrl = apiData?.source || apiData?.url || apiData?.file || '';
+            const finalStreamUrl = apiData?.sources?.file || apiData?.sources?.url || apiData?.source || apiData?.url || apiData?.file || '';
 
             if (finalStreamUrl) {
               return {
