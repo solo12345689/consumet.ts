@@ -14,10 +14,12 @@ import {
 } from '../../models';
 import { AxiosAdapter } from 'axios';
 
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
 class AnimeSaturn extends AnimeParser {
   override readonly name = 'AnimeSaturn';
-  protected override baseUrl = 'https://www.animesaturn.cx/';
-  protected override logo = 'https://www.animesaturn.cx/immagini/favicon-32x32.png';
+  protected override baseUrl = 'https://www.animesaturn.net/';
+  protected override logo = 'https://www.animesaturn.net/assets/img/favicon/favicon-96x96.png';
   protected override classPath = 'ANIME.AnimeSaturn';
   public cookie: string = process.env.ANIMEUNITY_COOKIE || '';
 
@@ -27,65 +29,139 @@ class AnimeSaturn extends AnimeParser {
   }
 
   private activeProxyAgent: any = null;
+  private proxiesList: string[] = [];
+  private lastProxyFetchTime = 0;
 
   private async getProxyAgent(): Promise<any> {
     if (this.activeProxyAgent) return this.activeProxyAgent;
-    try {
-      const res = await axios.get('https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=yes&anonymity=anonymous', { timeout: 6000 });
-      const proxies = res.data.split('\r\n').filter(Boolean);
-      if (proxies.length > 0) {
-        const selectedProxy = proxies[Math.floor(Math.random() * Math.min(proxies.length, 10))];
-        const [host, port] = selectedProxy.split(':');
-        this.activeProxyAgent = {
-          agent: new HttpsProxyAgent(`http://${selectedProxy}`),
-          host,
-          port: parseInt(port)
-        };
-        return this.activeProxyAgent;
+
+    const now = Date.now();
+    if (this.proxiesList.length === 0 || now - this.lastProxyFetchTime > 300000) {
+      try {
+        const res = await axios.get('https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt', { timeout: 4000 });
+        const proxies = res.data.split('\n').map((p: string) => p.trim()).filter(Boolean);
+        if (proxies.length > 0) {
+          this.proxiesList = proxies;
+          this.lastProxyFetchTime = now;
+        }
+      } catch (e) {
+        try {
+          const res = await axios.get('https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all', { timeout: 6000 });
+          const proxies = res.data.split('\r\n').filter(Boolean);
+          if (proxies.length > 0) {
+            this.proxiesList = proxies;
+            this.lastProxyFetchTime = now;
+          }
+        } catch (err) {
+          // ignore
+        }
       }
-    } catch (e) {
-      // Fallback if proxy retrieval fails
+    }
+
+    if (this.proxiesList.length > 0) {
+      const selectedProxy = this.proxiesList[Math.floor(Math.random() * Math.min(this.proxiesList.length, 30))];
+      const [host, port] = selectedProxy.split(':');
+      this.activeProxyAgent = {
+        agent: new HttpsProxyAgent(`http://${selectedProxy}`),
+        host,
+        port: parseInt(port)
+      };
+      return this.activeProxyAgent;
     }
     return null;
   }
 
-  /**
-   * Safe request wrapper that tries via Proxy if direct requests fail
-   */
   private async requestSafe(url: string, config: any = {}): Promise<any> {
+    if (this.activeProxyAgent) {
+      try {
+        return await axios.get(url, {
+          ...config,
+          headers: {
+            ...config.headers,
+            'Referer': config.headers?.Referer || config.headers?.referer || `${this.baseUrl}`,
+            'User-Agent': config.headers?.['User-Agent'] || config.headers?.['user-agent'] || USER_AGENT,
+          },
+          httpAgent: this.activeProxyAgent.agent,
+          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
+          proxy: {
+            host: this.activeProxyAgent.host,
+            port: this.activeProxyAgent.port,
+          },
+          timeout: 5000,
+        });
+      } catch (err) {
+        if (this.activeProxyAgent) {
+          const failedProxyStr = `${this.activeProxyAgent.host}:${this.activeProxyAgent.port}`;
+          this.proxiesList = this.proxiesList.filter(p => p !== failedProxyStr);
+        }
+        this.activeProxyAgent = null;
+      }
+    }
+
     try {
-      // First try direct connection
       const directConfig = { ...config };
       if (!directConfig.httpsAgent) {
         directConfig.httpsAgent = new (require('https').Agent)({ rejectUnauthorized: false });
       }
-      return await this.client.get(url, directConfig);
+      return await this.client.get(url, { ...directConfig, timeout: 3000 });
     } catch (err: any) {
-      if (err.response?.status === 502 || err.code === 'ECONNRESET' || err.response?.status === 403 || err.message.includes('timeout') || err.message.includes('certificate')) {
-        // Fetch/use proxy agent
-        const proxyInfo = await this.getProxyAgent();
-        if (proxyInfo) {
-          try {
-            return await axios.get(url, {
-              ...config,
-              httpAgent: proxyInfo.agent,
-              httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
-              proxy: {
-                host: proxyInfo.host,
-                port: proxyInfo.port,
-              },
-              timeout: 10000,
-            });
-          } catch (proxyErr) {
-            // If proxy fails, clear active agent to fetch a new one next time
-            this.activeProxyAgent = null;
-            throw proxyErr;
+      const isNetworkErr = 
+        err.response?.status === 502 || 
+        err.response?.status === 403 || 
+        err.code === 'ECONNRESET' || 
+        err.code === 'ETIMEDOUT' || 
+        err.code === 'ENOTFOUND' || 
+        err.message?.toLowerCase().includes('timeout') || 
+        err.message?.toLowerCase().includes('certificate');
+
+      if (isNetworkErr) {
+        let lastError = err;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const proxyInfo = await this.getProxyAgent();
+          if (proxyInfo) {
+            try {
+              const res = await axios.get(url, {
+                ...config,
+                headers: {
+                  ...config.headers,
+                  'Referer': config.headers?.Referer || config.headers?.referer || `${this.baseUrl}`,
+                  'User-Agent': config.headers?.['User-Agent'] || config.headers?.['user-agent'] || USER_AGENT,
+                },
+                httpAgent: proxyInfo.agent,
+                httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
+                proxy: {
+                  host: proxyInfo.host,
+                  port: proxyInfo.port,
+                },
+                timeout: 5000,
+              });
+              this.activeProxyAgent = proxyInfo;
+              return res;
+            } catch (proxyErr) {
+              if (this.activeProxyAgent) {
+                const failedProxyStr = `${this.activeProxyAgent.host}:${this.activeProxyAgent.port}`;
+                this.proxiesList = this.proxiesList.filter(p => p !== failedProxyStr);
+              }
+              this.activeProxyAgent = null;
+              lastError = proxyErr;
+            }
           }
         }
+        throw lastError;
       }
-      console.error('AnimeSaturn direct request failed:', err.message);
       throw err;
     }
+  }
+
+  private dec(b: string, k: string): string {
+    if (!b) return '';
+    const s = Buffer.from(b, 'base64').toString('binary');
+    let o = '';
+    k = k || 'as';
+    for (let i = 0; i < s.length; i++) {
+      o += String.fromCharCode(s.charCodeAt(i) ^ k.charCodeAt(i % k.length));
+    }
+    return o;
   }
 
   /**
@@ -95,7 +171,6 @@ class AnimeSaturn extends AnimeParser {
    */
   override search = async (query: string): Promise<ISearch<IAnimeResult>> => {
     const data = await this.requestSafe(`${this.baseUrl}filter?key=${query}`);
-
     const $ = await load(data.data);
 
     if (!$) return { results: [] };
@@ -117,7 +192,6 @@ class AnimeSaturn extends AnimeParser {
       };
 
       if (!item.id) return;
-
       res.results.push(item);
     });
     return res;
@@ -132,44 +206,63 @@ class AnimeSaturn extends AnimeParser {
     const data = await this.requestSafe(`${this.baseUrl}anime/${id}`);
     const $ = await load(data.data);
 
+    let title = $('h1').text().trim();
+    let image = $('div.ag-poster img').attr('src') || $('div.anime-poster-card img').attr('src');
+    let description = '';
+
+    try {
+      const jsonLd = $('script[type="application/ld+json"]');
+      jsonLd.each((i, el) => {
+        const text = $(el).html();
+        if (text) {
+          const parsed = JSON.parse(text);
+          if (parsed['@type'] === 'TVSeries' || parsed['@type'] === 'Movie' || parsed['@type'] === 'TVEpisode') {
+            if (!title) title = parsed.name || parsed.alternateName;
+            if (!image) image = parsed.image;
+            if (!description) description = parsed.description;
+          }
+        }
+      });
+    } catch (e) {
+      // ignore
+    }
+
+    if (!title) {
+      title = $('title').text().replace('Streaming ITA', '').replace('AnimeSaturn', '').replace(/[\s-]/g, ' ').trim();
+    }
+
     const info: IAnimeInfo = {
       id,
-      title: $('div.container.anime-title-as> b').text(),
-      malID: $('a[href^="https://myanimelist.net/anime/"]').attr('href')?.slice(30, -1),
-      alID: $('a[href^="https://anilist.co/anime/"]').attr('href')?.slice(25, -1),
+      title,
+      malID: $('a[href*="myanimelist.net/anime/"]').attr('href')?.split('/anime/')?.[1]?.split('/')?.[0],
+      alID: $('a[href*="anilist.co/anime/"]').attr('href')?.split('/anime/')?.[1]?.split('/')?.[0],
       genres:
-        $('div.container a.badge.badge-light')
+        $('a.chip[href*="categories="]')
           ?.map((i, element): string => {
-            return $(element).text();
+            return $(element).text().trim();
           })
           .toArray() ?? undefined,
-      image: $('img.img-fluid')?.attr('src') || undefined,
-      cover:
-        $('div.banner')
-          ?.attr('style')
-          ?.match(/background:\s*url\(['"]?([^'")]+)['"]?\)/i)?.[1] || undefined,
-      description: $('#full-trama').text(),
+      image: image || undefined,
+      cover: $('img.anime-hero__bg').attr('src') || undefined,
+      description: description || undefined,
       episodes: [],
     };
 
     const episodes: IAnimeEpisode[] = [];
 
-    $('.tab-pane.fade').each((i, element) => {
-      $(element)
-        .find('.bottone-ep')
-        .each((i, element) => {
-          const link = $(element).attr('href');
-          const episodeNumber = $(element).text().trim().replace('Episodio ', '').trim();
+    $('a.ep-tile').each((i, element) => {
+      const link = $(element).attr('href');
+      const episodeNumber = $(element).text().trim();
 
-          episodes.push({
-            number: parseInt(episodeNumber),
-            id: link?.split('/')?.pop() ?? '',
-          });
+      if (link) {
+        episodes.push({
+          number: parseInt(episodeNumber) || (i + 1),
+          id: link.replace('/episode/', ''),
         });
+      }
     });
 
     info.episodes = episodes.sort((a, b) => a.number - b.number);
-
     return info;
   };
 
@@ -179,144 +272,98 @@ class AnimeSaturn extends AnimeParser {
    * @returns Promise<ISource>
    */
   override fetchEpisodeSources = async (episodeId: string): Promise<ISource> => {
-    const episodeData = await this.requestSafe(`${this.baseUrl}ep/${episodeId}`, {
+    const episodeUrl = `${this.baseUrl}episode/${episodeId}`;
+    const episodeRes = await this.requestSafe(episodeUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        Referer: this.baseUrl,
-        Connection: 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'same-origin',
-        Priority: 'u=0, i',
-      },
+        'User-Agent': USER_AGENT,
+        Referer: `${this.baseUrl}`,
+      }
     });
 
-    const $episode = await load(episodeData.data);
-
-    let watchUrl = $episode("a:contains('Guarda lo streaming')").attr('href');
-
-    if (!watchUrl) {
-      watchUrl = $episode("div:contains('Guarda lo streaming')").parent('a').attr('href');
+    const $episodePage = await load(episodeRes.data);
+    let watchPath = $episodePage("a:contains('Guarda lo streaming')").attr('href');
+    if (!watchPath) {
+      watchPath = $episodePage("div:contains('Guarda lo streaming')").parent('a').attr('href');
+    }
+    if (!watchPath) {
+      watchPath = $episodePage("a[href*='/anime/']").filter((i, el) => $episodePage(el).text().includes('Guarda')).attr('href');
     }
 
-    if (!watchUrl) {
-      watchUrl = $episode("a[href*='watch']").attr('href');
-    }
+    const watchPageUrl = watchPath 
+      ? (watchPath.startsWith('http') ? watchPath : `${this.baseUrl}${watchPath.replace(/^\//, '')}`)
+      : `${this.baseUrl}anime/${episodeId}`;
 
-    if (!watchUrl) {
-      throw new Error('Watch URL not found');
-    }
-
-    const watchData = await this.requestSafe(watchUrl, {
+    const watchPageData = await this.requestSafe(watchPageUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        Referer: `${this.baseUrl}ep/${episodeId}`,
-        Connection: 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'same-origin',
-        'Sec-Fetch-User': '?1',
-        Priority: 'u=0, i',
-      },
+        'User-Agent': USER_AGENT,
+        Referer: episodeUrl,
+      }
     });
 
-    const $watch = await load(watchData.data);
+    const $watchPage = await load(watchPageData.data);
+    let iframeSrc = '';
+    $watchPage('iframe').each((i, el) => {
+      const src = $watchPage(el).attr('src');
+      if (src && src.includes('play.saturncdn.net')) {
+        iframeSrc = src;
+      }
+    });
+
+    if (!iframeSrc) {
+      iframeSrc = $watchPage('iframe').first().attr('src') || '';
+    }
+
+    if (!iframeSrc || !iframeSrc.includes('play.saturncdn.net')) {
+      throw new Error('Player iframe not found or invalid');
+    }
+
+    const embedRes = await this.requestSafe(iframeSrc, {
+      headers: {
+        'Referer': watchPageUrl,
+        'User-Agent': USER_AGENT,
+      }
+    });
+
+    const embedHtml = embedRes.data;
+    const match = embedHtml.match(/window\.__E\s*=\s*({[^}]+})/);
+    if (!match) {
+      throw new Error('window.__E not found in embed page');
+    }
+
+    const __E = JSON.parse(match[1].replace(/(\w+):/g, '"$1":'));
+
+    const playlistUrl = `https://play.saturncdn.net/embed/${__E.i}/playlist?token=${encodeURIComponent(__E.k)}&expires=${__E.e}`;
+    const playlistRes = await this.requestSafe(playlistUrl, {
+      headers: {
+        'Referer': iframeSrc,
+        'User-Agent': USER_AGENT,
+      }
+    });
+
+    const playlistJson = playlistRes.data;
+    const decryptedSource = this.dec(playlistJson.d, __E.k);
+    if (!decryptedSource) {
+      throw new Error('Failed to decrypt video source');
+    }
 
     const sources: ISource = {
       headers: {
-        Referer: watchUrl,
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0',
+        Referer: iframeSrc,
+        'User-Agent': USER_AGENT,
       },
       subtitles: [],
-      sources: [],
+      sources: [
+        {
+          url: decryptedSource,
+          isM3U8: decryptedSource.includes('.m3u8'),
+          quality: 'default',
+        }
+      ],
     };
 
-    $watch('video source').each((i, element) => {
-      const src = $watch(element).attr('src');
-      if (src && (src.includes('.mp4') || src.includes('.m3u8'))) {
-        sources.sources.push({
-          url: src,
-          isM3U8: src.includes('.m3u8'),
-          quality: 'default',
-        });
-      }
-    });
-
-    const videoSrc = $watch('video#myvideo').attr('src');
-    if (videoSrc && (videoSrc.includes('.mp4') || videoSrc.includes('.m3u8'))) {
-      if (!sources.sources.some(s => s.url === videoSrc)) {
-        sources.sources.push({
-          url: videoSrc,
-          isM3U8: videoSrc.includes('.m3u8'),
-          quality: 'default',
-        });
-      }
-    }
-
-    $watch('script').each((i, element) => {
-      const scriptText = $watch(element).text();
-
-      if (scriptText.includes('jwplayer') || scriptText.includes('file:')) {
-        const lines = scriptText.split('\n');
-
-        for (const line of lines) {
-          if (line.includes('file:')) {
-            let url = line.split('file:')[1].trim().replace(/['"]/g, '').replace(/,/g, '').trim();
-
-            if (url && (url.includes('.mp4') || url.includes('.m3u8'))) {
-              if (!sources.sources.some(s => s.url === url)) {
-                sources.sources.push({
-                  url: url,
-                  isM3U8: url.includes('.m3u8'),
-                  quality: 'default',
-                });
-              }
-            }
-          }
-        }
-      }
-
-      const mp4Match = scriptText.match(/https?:\/\/[^"'\s]+\.mp4[^"'\s]*/g);
-      if (mp4Match) {
-        mp4Match.forEach(url => {
-          if (!sources.sources.some(s => s.url === url)) {
-            sources.sources.push({
-              url: url,
-              isM3U8: false,
-              quality: 'default',
-            });
-          }
-        });
-      }
-
-      const m3u8Match = scriptText.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/g);
-      if (m3u8Match) {
-        m3u8Match.forEach(url => {
-          if (!sources.sources.some(s => s.url === url)) {
-            sources.sources.push({
-              url: url,
-              isM3U8: true,
-              quality: 'default',
-            });
-          }
-        });
-      }
-    });
-
-    if (sources.sources.length === 0) {
-      throw new Error('No video sources found');
-    }
-
-    const m3u8Source = sources.sources.find(s => s.isM3U8);
-    if (m3u8Source && m3u8Source.url.includes('playlist.m3u8')) {
+    if (decryptedSource.includes('playlist.m3u8')) {
       sources.subtitles?.push({
-        url: m3u8Source.url.replace('playlist.m3u8', 'subtitles.vtt'),
+        url: decryptedSource.replace('playlist.m3u8', 'subtitles.vtt'),
         lang: 'Italian',
       });
     }
@@ -330,94 +377,22 @@ class AnimeSaturn extends AnimeParser {
    * @returns Promise<IEpisodeServer[]>
    */
   override fetchEpisodeServers = async (episodeId: string): Promise<IEpisodeServer[]> => {
-    const episodeData = await this.client.get(`${this.baseUrl}ep/${episodeId}`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        Referer: this.baseUrl,
-        Connection: 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'same-origin',
-        Priority: 'u=0, i',
-      },
-    });
-
-    const $episode = await load(episodeData.data);
-    const servers: IEpisodeServer[] = [];
-
-    const mainWatchUrl = $episode("a:contains('Guarda lo streaming')").attr('href');
-    if (mainWatchUrl) {
-      servers.push({
-        name: 'Server 1',
-        url: mainWatchUrl,
-      });
-    }
-
-    if (mainWatchUrl) {
-      const watchData = await this.client.get(mainWatchUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0',
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-          Referer: `${this.baseUrl}ep/${episodeId}`,
-          Connection: 'keep-alive',
-          'Upgrade-Insecure-Requests': '1',
-          'Sec-Fetch-Dest': 'document',
-          'Sec-Fetch-Mode': 'navigate',
-          'Sec-Fetch-Site': 'same-origin',
-          'Sec-Fetch-User': '?1',
-          Priority: 'u=0, i',
-        },
-      });
-
-      const $watch = await load(watchData.data);
-
-      $watch('.dropdown-menu .dropdown-item').each((i, element) => {
-        const serverUrl = $watch(element).attr('href');
-        const serverName = $watch(element).text().trim();
-
-        if (serverUrl && serverName && !servers.some(s => s.url === serverUrl)) {
-          servers.push({
-            name: serverName,
-            url: serverUrl,
-          });
-        }
-      });
-
-      const altPlayerUrl = $watch("a:contains('Player alternativo')").attr('href');
-      if (altPlayerUrl && !servers.some(s => s.url === altPlayerUrl)) {
-        servers.push({
-          name: 'Player Alternativo',
-          url: altPlayerUrl,
-        });
-      }
-
-      $watch('iframe').each((i, element) => {
-        const src = $watch(element).attr('src');
-        if (src && (src.includes('streamtape') || src.includes('mixdrop') || src.includes('doodstream'))) {
-          const serverName = src.includes('streamtape')
-            ? 'StreamTape'
-            : src.includes('mixdrop')
-            ? 'MixDrop'
-            : src.includes('doodstream')
-            ? 'DoodStream'
-            : 'External Server';
-
-          if (!servers.some(s => s.url === src)) {
-            servers.push({
-              name: serverName,
-              url: src,
-            });
+    try {
+      const sources = await this.fetchEpisodeSources(episodeId);
+      if (sources.sources && sources.sources.length > 0) {
+        return [
+          {
+            name: 'SaturnCDN',
+            url: sources.sources[0].url,
           }
-        }
-      });
+        ];
+      }
+    } catch (e) {
+      // ignore
     }
-
-    return servers;
+    return [];
   };
 }
 
 export default AnimeSaturn;
+

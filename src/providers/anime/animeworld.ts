@@ -28,53 +28,106 @@ class AnimeWorld extends AnimeParser {
     this.client.defaults.httpsAgent = new (require('https').Agent)({ rejectUnauthorized: false });
   }
 
+  private proxiesList: string[] = [];
+  private lastProxyFetchTime = 0;
+
   private async getProxyAgent(): Promise<any> {
     if (this.activeProxyAgent) return this.activeProxyAgent;
-    try {
-      const res = await axios.get('https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=yes&anonymity=anonymous', { timeout: 6000 });
-      const proxies = res.data.split('\r\n').filter(Boolean);
-      if (proxies.length > 0) {
-        const selectedProxy = proxies[Math.floor(Math.random() * Math.min(proxies.length, 10))];
-        const [host, port] = selectedProxy.split(':');
-        this.activeProxyAgent = {
-          agent: new HttpsProxyAgent(`http://${selectedProxy}`),
-          host,
-          port: parseInt(port)
-        };
-        return this.activeProxyAgent;
+
+    const now = Date.now();
+    if (this.proxiesList.length === 0 || now - this.lastProxyFetchTime > 300000) {
+      try {
+        const res = await axios.get('https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt', { timeout: 4000 });
+        const proxies = res.data.split('\n').map((p: string) => p.trim()).filter(Boolean);
+        if (proxies.length > 0) {
+          this.proxiesList = proxies;
+          this.lastProxyFetchTime = now;
+        }
+      } catch (e) {
+        try {
+          const res = await axios.get('https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all', { timeout: 6000 });
+          const proxies = res.data.split('\r\n').filter(Boolean);
+          if (proxies.length > 0) {
+            this.proxiesList = proxies;
+            this.lastProxyFetchTime = now;
+          }
+        } catch (err) {
+          // ignore
+        }
       }
-    } catch (e) {
-      // Fallback
+    }
+
+    if (this.proxiesList.length > 0) {
+      const selectedProxy = this.proxiesList[Math.floor(Math.random() * Math.min(this.proxiesList.length, 30))];
+      const [host, port] = selectedProxy.split(':');
+      this.activeProxyAgent = {
+        agent: new HttpsProxyAgent(`http://${selectedProxy}`),
+        host,
+        port: parseInt(port)
+      };
+      return this.activeProxyAgent;
     }
     return null;
   }
 
-  /**
-   * Safe request wrapper that tries via Proxy if direct requests fail
-   */
   private async requestSafe(url: string, config: any = {}): Promise<any> {
+    // If we have an active proxy that worked, try using it first
+    if (this.activeProxyAgent) {
+      try {
+        return await axios.get(url, {
+          ...config,
+          headers: {
+            ...config.headers,
+            'Referer': config.headers?.Referer || config.headers?.referer || `${this.baseUrl}/`,
+            'User-Agent': config.headers?.['User-Agent'] || config.headers?.['user-agent'] || USER_AGENT,
+          },
+          httpAgent: this.activeProxyAgent.agent,
+          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
+          proxy: {
+            host: this.activeProxyAgent.host,
+            port: this.activeProxyAgent.port,
+          },
+          timeout: 5000,
+        });
+      } catch (err) {
+        if (this.activeProxyAgent) {
+          const failedProxyStr = `${this.activeProxyAgent.host}:${this.activeProxyAgent.port}`;
+          this.proxiesList = this.proxiesList.filter(p => p !== failedProxyStr);
+        }
+        // Active proxy failed, clear it to find a new one
+        this.activeProxyAgent = null;
+      }
+    }
+
     try {
-      // First try direct connection
+      // Try direct connection first
       const directConfig = { ...config };
       if (!directConfig.httpsAgent) {
         directConfig.httpsAgent = new (require('https').Agent)({ rejectUnauthorized: false });
       }
-      return await this.client.get(url, { ...directConfig, timeout: 5000 });
+      return await this.client.get(url, { ...directConfig, timeout: 3000 });
     } catch (err: any) {
-      if (err.response?.status === 502 || err.code === 'ECONNRESET' || err.response?.status === 403 || err.message.includes('timeout') || err.message.includes('certificate')) {
-        // Clear active agent if the first direct call failed so we fetch fresh
-        this.activeProxyAgent = null;
+      const isNetworkErr = 
+        err.response?.status === 502 || 
+        err.response?.status === 403 || 
+        err.code === 'ECONNRESET' || 
+        err.code === 'ETIMEDOUT' || 
+        err.code === 'ENOTFOUND' || 
+        err.message?.toLowerCase().includes('timeout') || 
+        err.message?.toLowerCase().includes('certificate');
+
+      if (isNetworkErr) {
         let lastError = err;
         for (let attempt = 0; attempt < 5; attempt++) {
           const proxyInfo = await this.getProxyAgent();
           if (proxyInfo) {
             try {
-              return await axios.get(url, {
+              const res = await axios.get(url, {
                 ...config,
                 headers: {
                   ...config.headers,
-                  'Referer': config.headers?.referer || `${this.baseUrl}/`,
-                  'User-Agent': USER_AGENT,
+                  'Referer': config.headers?.Referer || config.headers?.referer || `${this.baseUrl}/`,
+                  'User-Agent': config.headers?.['User-Agent'] || config.headers?.['user-agent'] || USER_AGENT,
                 },
                 httpAgent: proxyInfo.agent,
                 httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
@@ -82,11 +135,18 @@ class AnimeWorld extends AnimeParser {
                   host: proxyInfo.host,
                   port: proxyInfo.port,
                 },
-                timeout: 8000,
+                timeout: 5000,
               });
+              // Success! Cache this working proxy agent
+              this.activeProxyAgent = proxyInfo;
+              return res;
             } catch (proxyErr: any) {
+              if (this.activeProxyAgent) {
+                const failedProxyStr = `${this.activeProxyAgent.host}:${this.activeProxyAgent.port}`;
+                this.proxiesList = this.proxiesList.filter(p => p !== failedProxyStr);
+              }
               lastError = proxyErr;
-              // Try next proxy in the list on failure
+              // Try next proxy
               this.activeProxyAgent = null;
             }
           }

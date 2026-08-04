@@ -4,10 +4,11 @@ import { ANIME, MANGA, BOOKS, COMICS, LIGHT_NOVELS, MOVIES, META, NEWS } from '.
 export const PROVIDERS_LIST = {
   ANIME: [
     new ANIME.AniKoto(),
-    new ANIME.AnimeKai(),
+    new ANIME.ReAnime(),
     new ANIME.AnimeWorld(),
     new ANIME.GogoAnime(),
     new ANIME.AnimeSaturn(),
+    new ANIME.Miruro(),
   ],
   MANGA: [
     new MANGA.WeebCentral(),

@@ -523,25 +523,47 @@ class AniKoto extends AnimeParser {
       info.description = $('.synopsis .content, div.film-description').text().trim();
       info.type = ($('.bmeta .meta:first-child > div:nth-child(1) span').text().trim() || $('span.item').last().prev().prev().text().trim()).toUpperCase() as MediaFormat;
       info.url = animeUrl;
-      info.recommendations = await this.scrapeCard($);
+      info.recommendations = [];
       info.relatedAnime = [];
 
-      $('#main-sidebar section div.anif-block-ul li, .section-updated .item').each((i: number, ele: any) => {
-        const card = $(ele);
-        const aTag = card.find('.film-name a, a.name.d-title').first();
-        const href = aTag.attr('href');
-        const relId = href?.split('/watch/').pop() || href?.split('/')[1]?.split('?')[0];
+      // recommendations is the Recommended section on the sidebar
+      const recommendedSection = $('.w-side-section').filter((i, el) => $(el).find('h2, h3, .title').text().includes('Recommended'));
+      recommendedSection.find('.item').each((i, el) => {
+        const card = $(el);
+        const href = card.attr('href') || '';
+        let relId = href.split('/watch/').pop()?.split('?')[0] || '';
+        if (relId.includes('/ep-')) {
+          relId = relId.split('/ep-')[0];
+        }
         if (relId) {
-          info.relatedAnime.push({
+          const title = card.find('.name, a.name').text().trim() || card.find('img').attr('alt') || '';
+          info.recommendations?.push({
             id: relId,
-            title: aTag.text().trim(),
-            url: `${this.baseUrl}${href?.startsWith('/') ? href : '/' + href}`,
-            image: card.find('img')?.attr('src') || card.find('img')?.attr('data-src'),
-            japaneseTitle: aTag.attr('data-jp') || aTag.attr('data-jname'),
-            type: card.find('.meta .inner .right')?.text()?.trim() as MediaFormat,
-            sub: parseInt(card.find('.ep-status.sub span')?.text()?.replace(/\D+/g, '')) || 0,
-            dub: parseInt(card.find('.ep-status.dub span')?.text()?.replace(/\D+/g, '')) || 0,
-            episodes: parseInt(card.find('.ep-status.total span')?.text()?.replace(/\D+/g, '')) || 0,
+            title: title,
+            url: href.startsWith('http') ? href : `${this.baseUrl}${href.startsWith('/') ? href : '/' + href}`,
+            image: card.find('img').attr('src') || card.find('img').attr('data-src'),
+            type: card.find('.meta span.dot, .dot').first().text().trim() as MediaFormat,
+          });
+        }
+      });
+
+      // relatedAnime is the Trending section on the sidebar
+      const trendingSection = $('.w-side-section').filter((i, el) => $(el).find('h2, h3, .title').text().includes('Trending'));
+      trendingSection.find('.item').each((i, el) => {
+        const card = $(el);
+        const href = card.attr('href') || '';
+        let relId = href.split('/watch/').pop()?.split('?')[0] || '';
+        if (relId.includes('/ep-')) {
+          relId = relId.split('/ep-')[0];
+        }
+        if (relId) {
+          const title = card.find('.name, a.name').text().trim() || card.find('img').attr('alt') || '';
+          info.relatedAnime?.push({
+            id: relId,
+            title: title,
+            url: href.startsWith('http') ? href : `${this.baseUrl}${href.startsWith('/') ? href : '/' + href}`,
+            image: card.find('img').attr('src') || card.find('img').attr('data-src'),
+            type: card.find('.meta span.dot, .dot').first().text().trim() as MediaFormat,
           });
         }
       });
@@ -592,11 +614,11 @@ class AniKoto extends AnimeParser {
               epSlug = href.split('/watch/').pop()?.replace('/ep-', '$episode$') || epSlug;
             }
 
-            info.episodes?.push({
+             info.episodes?.push({
               id: epSlug,
               number: epNum,
               title: a.attr('title') || a.find('.d-title').text().trim() || `Episode ${epNum}`,
-              url: href.startsWith('http') ? href : `${this.baseUrl}${href.startsWith('/') ? href : '/' + href}`,
+              url: (!href || href === '#') ? `${this.baseUrl}/watch/${id}/ep-${epNum}` : (href.startsWith('http') ? href : `${this.baseUrl}${href.startsWith('/') ? href : '/' + href}`),
             });
           });
         } catch (ajaxErr) {}
@@ -615,7 +637,7 @@ class AniKoto extends AnimeParser {
               id: epId || `${id}$episode$${number}`,
               number: number,
               title: $(el).attr('title') || `Episode ${number}`,
-              url: href.startsWith('http') ? href : `${this.baseUrl}${href.startsWith('/') ? href : '/' + href}`,
+              url: (!href || href === '#') ? `${this.baseUrl}/watch/${id}/ep-${number}` : (href.startsWith('http') ? href : `${this.baseUrl}${href.startsWith('/') ? href : '/' + href}`),
             });
           });
         }
@@ -637,9 +659,9 @@ class AniKoto extends AnimeParser {
    */
   override fetchEpisodeSources = async (
     episodeId: string,
-    server: StreamingServers = StreamingServers.VidCloud,
+    server?: StreamingServers,
     subOrDub: SubOrSub = SubOrSub.SUB
-  ): Promise<ISource> => {
+  ): Promise<any> => {
     if (episodeId.startsWith('http')) {
       const serverUrl = new URL(episodeId);
       switch (server) {
@@ -647,7 +669,7 @@ class AniKoto extends AnimeParser {
         case StreamingServers.VidCloud:
           return {
             headers: { Referer: serverUrl.href },
-            ...(await new MegaCloud().extract(serverUrl)),
+            sub: await new MegaCloud().extract(serverUrl),
           };
         case StreamingServers.StreamSB:
           return {
@@ -656,23 +678,27 @@ class AniKoto extends AnimeParser {
               watchsb: 'streamsb',
               'User-Agent': USER_AGENT,
             },
-            sources: await new StreamSB(this.proxyConfig, this.adapter).extract(serverUrl, true),
+            sub: {
+              sources: await new StreamSB(this.proxyConfig, this.adapter).extract(serverUrl, true),
+            }
           };
         case StreamingServers.StreamTape:
           return {
             headers: { Referer: serverUrl.href, 'User-Agent': USER_AGENT },
-            sources: await new StreamTape(this.proxyConfig, this.adapter).extract(serverUrl),
+            sub: {
+              sources: await new StreamTape(this.proxyConfig, this.adapter).extract(serverUrl),
+            }
           };
         default:
         case StreamingServers.VidCloud:
           return {
             headers: { Referer: serverUrl.href },
-            ...(await new MegaCloud().extract(serverUrl)),
+            sub: await new MegaCloud().extract(serverUrl),
           };
       }
     }
-    if (!episodeId.includes('$episode$') && !episodeId.includes('link-')) {
-      // allow raw linkId or episodeId
+    if (!episodeId.includes('$episode$') && !episodeId.includes('link-') && !episodeId.startsWith('http')) {
+      episodeId = `${episodeId}$episode$1`;
     }
 
     try {
@@ -685,6 +711,8 @@ class AniKoto extends AnimeParser {
         const watchSlug = parts[0].split('/').pop() || parts[0];
         const epNum = parts[1].split('?')[0];
         episodeId = `${watchSlug}$episode$${epNum}`;
+      } else if (!episodeId.includes('$episode$')) {
+        episodeId = `${episodeId}$episode$1`;
       }
 
       if (episodeId.includes('$episode$')) {
@@ -715,18 +743,144 @@ class AniKoto extends AnimeParser {
               const serverHtml = typeof serverRes.data === 'string' ? serverRes.data : (serverRes.data?.result || '');
               const $$$ = load(serverHtml);
               
-              // We must parse the li elements to resolve the source embed token
-              const serverLi = $$$('li[data-link-id]').first();
-              const embedLinkId = serverLi.attr('data-link-id') || '';
-              const svId = serverLi.attr('data-sv-id') || '';
+              const subSources: any[] = [];
+              const subSubtitles: any[] = [];
+              let subIntro: any = null;
+              let subOutro: any = null;
+
+              const dubSources: any[] = [];
+              const dubSubtitles: any[] = [];
+              let dubIntro: any = null;
+              let dubOutro: any = null;
+
+              const divs = $$$('.servers > div.type');
+              for (const divEl of divs.toArray()) {
+                const div = $$$ (divEl);
+                const type = div.attr('data-type') || '';
+                const lis = div.find('li[data-link-id]');
+                
+                for (const liElement of lis.toArray()) {
+                  const li = $$$(liElement);
+                  const embedLinkId = li.attr('data-link-id') || '';
+                  const svId = li.attr('data-sv-id') || '';
+                  const serverName = li.text().trim();
+
+                  if (embedLinkId) {
+                    try {
+                      const svParam = svId ? `&sv=${svId}` : '';
+                      const { data: rawEmbed } = await this.client.get(`${this.baseUrl}/ajax/server?get=${encodeURIComponent(embedLinkId)}${svParam}`, {
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                      });
+                      const resObj = typeof rawEmbed === 'string' ? JSON.parse(rawEmbed) : rawEmbed;
+                      const tempEmbedUrl = resObj?.result?.url || resObj?.url || resObj?.link || '';
+
+                      if (tempEmbedUrl) {
+                        const finalUrl = tempEmbedUrl.startsWith('http') ? tempEmbedUrl : `https:${tempEmbedUrl}`;
+                        const embedRes = await this.client.get(finalUrl, {
+                          headers: {
+                            Referer: `${this.baseUrl}/`,
+                            Origin: this.baseUrl,
+                            'User-Agent': USER_AGENT,
+                          }
+                        });
+                        const embedHtml = typeof embedRes.data === 'string' ? embedRes.data : String(embedRes.data);
+                        const dataId = embedHtml.match(/id="megaplay-player"\s*data-id="(\d+)"/)?.[1] || embedHtml.match(/data-id="(\d+)"/)?.[1] || embedHtml.match(/id="(\d+)"/)?.[1];
+
+                        if (dataId) {
+                          const embedDomain = new URL(finalUrl).hostname;
+                          const apiRes = await this.client.get(`https://${embedDomain}/stream/getSources?id=${encodeURIComponent(dataId)}`, {
+                            headers: {
+                              Referer: finalUrl,
+                              Origin: `https://${embedDomain}`,
+                              'X-Requested-With': 'XMLHttpRequest',
+                              'User-Agent': USER_AGENT,
+                            }
+                          });
+                          const apiData = typeof apiRes.data === 'string' ? JSON.parse(apiRes.data) : apiRes.data;
+                          const finalStreamUrl = apiData?.sources?.file || apiData?.sources?.url || apiData?.source || apiData?.url || apiData?.file || '';
+
+                          if (finalStreamUrl) {
+                            const sourceObj = {
+                              url: finalStreamUrl,
+                              isM3U8: finalStreamUrl.includes('.m3u8'),
+                              quality: 'auto',
+                              server: serverName,
+                              headers: {
+                                Referer: finalUrl,
+                                'User-Agent': USER_AGENT,
+                              },
+                              isDub: type === 'dub'
+                            };
+                            
+                            const tracks: any[] = [];
+                            if (apiData?.tracks && Array.isArray(apiData.tracks)) {
+                              for (const track of apiData.tracks) {
+                                if (track.file) {
+                                  tracks.push({
+                                    url: track.file,
+                                    lang: track.label || 'English',
+                                  });
+                                }
+                              }
+                            }
+                            
+                            if (type === 'dub') {
+                              if (!dubSources.some(s => s.url === finalStreamUrl)) {
+                                dubSources.push(sourceObj);
+                              }
+                              for (const t of tracks) {
+                                if (!dubSubtitles.some(s => s.url === t.url)) {
+                                  dubSubtitles.push(t);
+                                }
+                              }
+                              if (apiData?.intro) dubIntro = apiData.intro;
+                              if (apiData?.outro) dubOutro = apiData.outro;
+                            } else {
+                              if (!subSources.some(s => s.url === finalStreamUrl)) {
+                                subSources.push(sourceObj);
+                              }
+                              for (const t of tracks) {
+                                if (!subSubtitles.some(s => s.url === t.url)) {
+                                  subSubtitles.push(t);
+                                }
+                              }
+                              if (apiData?.intro) subIntro = apiData.intro;
+                              if (apiData?.outro) subOutro = apiData.outro;
+                            }
+                          }
+                        }
+                      }
+                    } catch (err) {}
+                  }
+                }
+              }
+
+              const result: any = {
+                headers: { Referer: this.baseUrl }
+              };
               
-              if (embedLinkId) {
-                const svParam = svId ? `&sv=${svId}` : '';
-                const { data: rawEmbed } = await this.client.get(`${this.baseUrl}/ajax/server?get=${encodeURIComponent(embedLinkId)}${svParam}`, {
-                  headers: { 'X-Requested-With': 'XMLHttpRequest' }
-                });
-                const resObj = typeof rawEmbed === 'string' ? JSON.parse(rawEmbed) : rawEmbed;
-                embedUrl = resObj?.result?.url || resObj?.url || resObj?.link || '';
+              if (subSources.length > 0) {
+                result.sub = {
+                  sources: subSources,
+                  subtitles: subSubtitles,
+                  intro: subIntro,
+                  outro: subOutro,
+                  download: subSources[0].url,
+                };
+              }
+              
+              if (dubSources.length > 0) {
+                result.dub = {
+                  sources: dubSources,
+                  subtitles: dubSubtitles,
+                  intro: dubIntro,
+                  outro: dubOutro,
+                  download: dubSources[0].url,
+                };
+              }
+              
+              if (subSources.length > 0 || dubSources.length > 0) {
+                return result;
               }
             }
           }
@@ -747,15 +901,6 @@ class AniKoto extends AnimeParser {
         } catch (err) {}
       }
 
-      if (!embedUrl) {
-        if (episodeId.includes('$episode$')) {
-          const parts = episodeId.split('$episode$');
-          embedUrl = `${this.baseUrl}/watch/${parts[0]}/ep-${parts[1]}`;
-        } else {
-          embedUrl = `${this.baseUrl}/watch/${episodeId}`;
-        }
-      }
-
       if (embedUrl) {
         if (!embedUrl.startsWith('http')) {
           embedUrl = `https:${embedUrl}`;
@@ -766,10 +911,11 @@ class AniKoto extends AnimeParser {
             headers: {
               Referer: `${this.baseUrl}/`,
               Origin: this.baseUrl,
+              'User-Agent': USER_AGENT,
             }
           });
           const embedHtml = typeof embedRes.data === 'string' ? embedRes.data : String(embedRes.data);
-          const dataId = embedHtml.match(/data-id="(\d+)"/)?.[1] || embedHtml.match(/id="(\d+)"/)?.[1];
+          const dataId = embedHtml.match(/id="megaplay-player"\s*data-id="(\d+)"/)?.[1] || embedHtml.match(/data-id="(\d+)"/)?.[1] || embedHtml.match(/id="(\d+)"/)?.[1];
 
           if (dataId) {
             const embedDomain = new URL(embedUrl).hostname;
@@ -777,7 +923,8 @@ class AniKoto extends AnimeParser {
               headers: {
                 Referer: embedUrl,
                 Origin: `https://${embedDomain}`,
-                'X-Requested-With': 'XMLHttpRequest'
+                'X-Requested-With': 'XMLHttpRequest',
+                'User-Agent': USER_AGENT,
               }
             });
             const apiData = typeof apiRes.data === 'string' ? JSON.parse(apiRes.data) : apiRes.data;
@@ -786,29 +933,53 @@ class AniKoto extends AnimeParser {
             if (finalStreamUrl) {
               return {
                 headers: { Referer: embedUrl },
-                sources: [
-                  {
-                    url: finalStreamUrl,
-                    isM3U8: finalStreamUrl.includes('.m3u8'),
-                    quality: 'auto'
-                  }
-                ],
-                download: embedUrl
+                sub: {
+                  sources: [
+                    {
+                      url: finalStreamUrl,
+                      isM3U8: finalStreamUrl.includes('.m3u8'),
+                      quality: 'auto',
+                      headers: {
+                        Referer: embedUrl,
+                        'User-Agent': USER_AGENT,
+                      },
+                      isDub: false
+                    }
+                  ],
+                  download: embedUrl
+                }
               };
             }
           }
         } catch (embedErr) {}
 
+        let fallbackUrl = embedUrl;
+        if (fallbackUrl.includes('=') || fallbackUrl.includes('&')) {
+          if (episodeId.includes('$episode$')) {
+            const parts = episodeId.split('$episode$');
+            fallbackUrl = `${this.baseUrl}/watch/${parts[0]}/ep-${parts[1]}`;
+          } else {
+            fallbackUrl = `${this.baseUrl}/watch/${episodeId}`;
+          }
+        }
+
         return {
           headers: { Referer: this.baseUrl },
-          sources: [
-            {
-              url: embedUrl,
-              isM3U8: embedUrl.includes('.m3u8'),
-              quality: 'auto'
-            }
-          ],
-          download: embedUrl
+          sub: {
+            sources: [
+              {
+                url: fallbackUrl,
+                isM3U8: fallbackUrl.includes('.m3u8'),
+                quality: 'auto',
+                headers: {
+                  Referer: this.baseUrl,
+                  'User-Agent': USER_AGENT,
+                },
+                isDub: false
+              }
+            ],
+            download: fallbackUrl
+          }
         };
       }
 
@@ -911,7 +1082,7 @@ class AniKoto extends AnimeParser {
       $('.flw-item, #list-items > .item, .item').each((i: number, ele: any) => {
         try {
           const card = $(ele);
-          const atag = card.find('.film-name a, a.name.d-title, .name a, a').first();
+          const atag = card.find('.film-name a, a.name.d-title, .name a, .b1 a, a[href*="/watch/"]').first();
 
           const href = atag.attr('href');
           if (!href) {
