@@ -502,6 +502,8 @@ class AniKoto extends AnimeParser {
     const info: any = {
       id: id,
       title: '',
+      japaneseTitle: undefined,
+      type: undefined,
       image: undefined,
       description: undefined,
       episodes: [],
