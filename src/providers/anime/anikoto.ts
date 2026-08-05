@@ -273,25 +273,43 @@ class AniKoto extends AnimeParser {
   /**
    * @param episodeId Episode ID or slug
    */
-  async fetchDownloadLinks(episodeId: string): Promise<{ downloadUrl: string; headers?: Record<string, string> }> {
+  async fetchDownloadLinks(episodeId: string): Promise<any[]> {
     try {
       const sources = await this.fetchEpisodeSources(episodeId);
-      const sourceObj = sources.sources?.[0] || sources.sub?.sources?.[0] || sources.dub?.sources?.[0];
-      const m3u8Url = sourceObj?.url;
-      if (m3u8Url) {
-        return {
-          downloadUrl: m3u8Url,
-          headers: sourceObj.headers || sources.headers || { Referer: 'https://megaplay.buzz/' }
-        };
+      const results: { type: 'sub' | 'dub'; downloadUrl: string; headers?: Record<string, string> }[] = [];
+
+      const subM3u8 = sources.sub?.sources?.[0]?.url;
+      if (subM3u8) {
+        results.push({
+          type: 'sub',
+          downloadUrl: subM3u8,
+          headers: sources.sub.sources[0].headers || sources.headers || { Referer: 'https://megaplay.buzz/' }
+        });
+      }
+
+      const dubM3u8 = sources.dub?.sources?.[0]?.url;
+      if (dubM3u8) {
+        results.push({
+          type: 'dub',
+          downloadUrl: dubM3u8,
+          headers: sources.dub.sources[0].headers || sources.headers || { Referer: 'https://megaplay.buzz/' }
+        });
+      }
+
+      if (results.length > 0) {
+        return results;
       }
       
       const watchSlug = episodeId.split('$episode$')[0];
       const epNum = episodeId.split('$episode$')[1] || '1';
       const watchUrl = `${this.baseUrl}/watch/${watchSlug}/ep-${epNum}`;
-      return {
-        downloadUrl: watchUrl,
-        headers: { Referer: this.baseUrl }
-      };
+      return [
+        {
+          type: 'sub',
+          downloadUrl: watchUrl,
+          headers: { Referer: this.baseUrl }
+        }
+      ];
     } catch (err) {
       throw new Error('Download link not found');
     }
