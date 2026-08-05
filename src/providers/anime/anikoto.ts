@@ -499,9 +499,12 @@ class AniKoto extends AnimeParser {
    * @returns Promise<IAnimeInfo>
    */
   override fetchAnimeInfo = async (id: string): Promise<IAnimeInfo> => {
-    const info: IAnimeInfo = {
+    const info: any = {
       id: id,
       title: '',
+      image: undefined,
+      description: undefined,
+      episodes: [],
     };
     try {
       const animeUrl = id.startsWith('http') ? id : `${this.baseUrl}/watch/${id}`;
