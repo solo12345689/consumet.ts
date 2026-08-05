@@ -276,11 +276,12 @@ class AniKoto extends AnimeParser {
   async fetchDownloadLinks(episodeId: string): Promise<{ downloadUrl: string; headers?: Record<string, string> }> {
     try {
       const sources = await this.fetchEpisodeSources(episodeId);
-      const m3u8Url = sources.sources?.[0]?.url;
+      const sourceObj = sources.sources?.[0] || sources.sub?.sources?.[0] || sources.dub?.sources?.[0];
+      const m3u8Url = sourceObj?.url;
       if (m3u8Url) {
         return {
           downloadUrl: m3u8Url,
-          headers: sources.headers || { Referer: 'https://megaplay.buzz/' }
+          headers: sourceObj.headers || sources.headers || { Referer: 'https://megaplay.buzz/' }
         };
       }
       
