@@ -1,4 +1,6 @@
 import { load } from 'cheerio';
+import axios from 'axios';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 import {
   LightNovelParser,
@@ -19,6 +21,127 @@ class NovelFire extends LightNovelParser {
 
   private userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+  private activeProxyAgent: any = null;
+  private proxiesList: string[] = [];
+  private lastProxyFetchTime = 0;
+
+  private async getProxyAgent(): Promise<any> {
+    if (this.activeProxyAgent) return this.activeProxyAgent;
+
+    const now = Date.now();
+    if (this.proxiesList.length === 0 || now - this.lastProxyFetchTime > 300000) {
+      try {
+        const res = await axios.get('https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=US,DE,GB,CA&ssl=yes&anonymity=elite', { timeout: 6000 });
+        const proxies = res.data.split('\r\n').map((p: string) => p.trim()).filter(Boolean);
+        if (proxies.length > 0) {
+          this.proxiesList = proxies;
+          this.lastProxyFetchTime = now;
+        }
+      } catch (err) {
+        try {
+          const res = await axios.get('https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt', { timeout: 4000 });
+          const proxies = res.data.split('\n').map((p: string) => p.trim()).filter(Boolean);
+          if (proxies.length > 0) {
+            this.proxiesList = proxies;
+            this.lastProxyFetchTime = now;
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+
+    if (this.proxiesList.length > 0) {
+      const selectedProxy = this.proxiesList[Math.floor(Math.random() * Math.min(this.proxiesList.length, 30))];
+      const [host, port] = selectedProxy.split(':');
+      this.activeProxyAgent = {
+        agent: new HttpsProxyAgent(`http://${selectedProxy}`),
+        host,
+        port: parseInt(port)
+      };
+      return this.activeProxyAgent;
+    }
+    return null;
+  }
+
+  private async requestSafe(url: string, config: any = {}): Promise<any> {
+    const headers = {
+      ...config.headers,
+      'User-Agent': this.userAgent,
+      'Referer': config.headers?.Referer || config.headers?.referer || `${this.baseUrl}/`,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    };
+
+    // If we have an active proxy that worked, try using it first
+    if (this.activeProxyAgent) {
+      try {
+        return await axios.get(url, {
+          ...config,
+          headers,
+          httpAgent: this.activeProxyAgent.agent,
+          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
+          proxy: {
+            host: this.activeProxyAgent.host,
+            port: this.activeProxyAgent.port,
+          },
+          timeout: 8000,
+        });
+      } catch (err) {
+        if (this.activeProxyAgent) {
+          const failedProxyStr = `${this.activeProxyAgent.host}:${this.activeProxyAgent.port}`;
+          this.proxiesList = this.proxiesList.filter(p => p !== failedProxyStr);
+        }
+        this.activeProxyAgent = null;
+      }
+    }
+
+    // Try direct connection first
+    try {
+      return await this.client.get(url, {
+        ...config,
+        headers,
+        timeout: 5000,
+      });
+    } catch (err: any) {
+      const isBlockOrNetworkErr = 
+        err.response?.status === 403 || 
+        err.response?.status === 401 || 
+        err.response?.status === 502 || 
+        err.code === 'ECONNRESET' || 
+        err.code === 'ETIMEDOUT' || 
+        err.message?.toLowerCase().includes('timeout');
+
+      if (isBlockOrNetworkErr) {
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const proxyInfo = await this.getProxyAgent();
+          if (proxyInfo) {
+            try {
+              const res = await axios.get(url, {
+                ...config,
+                headers,
+                httpAgent: proxyInfo.agent,
+                httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
+                proxy: {
+                  host: proxyInfo.host,
+                  port: proxyInfo.port,
+                },
+                timeout: 8000,
+              });
+              // Success! Cache this working proxy
+              return res;
+            } catch (proxyErr) {
+              const failedProxyStr = `${proxyInfo.host}:${proxyInfo.port}`;
+              this.proxiesList = this.proxiesList.filter(p => p !== failedProxyStr);
+              this.activeProxyAgent = null;
+            }
+          }
+        }
+      }
+      throw err;
+    }
+  }
+
   /**
    * Search for novels on Novel Fire.
    * @param query search query string
@@ -27,14 +150,7 @@ class NovelFire extends LightNovelParser {
     const result: ISearch<ILightNovelResult> = { results: [] };
 
     try {
-      const { data } = await this.client.get(`${this.baseUrl}/search?keyword=${encodeURIComponent(query)}`, {
-        headers: {
-          'User-Agent': this.userAgent,
-          'Referer': `${this.baseUrl}/`,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-      });
+      const { data } = await this.requestSafe(`${this.baseUrl}/search?keyword=${encodeURIComponent(query)}`);
 
       const $ = load(data);
 
@@ -84,14 +200,7 @@ class NovelFire extends LightNovelParser {
     };
 
     try {
-      const { data } = await this.client.get(`${this.baseUrl}/book/${slug}`, {
-        headers: {
-          'User-Agent': this.userAgent,
-          'Referer': `${this.baseUrl}/`,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-      });
+      const { data } = await this.requestSafe(`${this.baseUrl}/book/${slug}`);
 
       const $ = load(data);
 
@@ -126,14 +235,7 @@ class NovelFire extends LightNovelParser {
 
       // Fetch the first page of chapters to determine pagination total
       const pageOneUrl = `${this.baseUrl}/book/${slug}/chapters?page=1`;
-      const pageOneRes = await this.client.get(pageOneUrl, {
-        headers: {
-          'User-Agent': this.userAgent,
-          'Referer': `${this.baseUrl}/book/${slug}`,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-      });
+      const pageOneRes = await this.requestSafe(pageOneUrl);
       const pageOne$ = load(pageOneRes.data);
 
       // Extract total page count from pagination links
@@ -149,14 +251,7 @@ class NovelFire extends LightNovelParser {
       // Fetch pages sequentially to avoid triggering 429 Rate Limiting blocks
       const chapters: ILightNovelChapter[] = [];
       for (let p = 1; p <= maxPage; p++) {
-        const pageRes = await this.client.get(`${this.baseUrl}/book/${slug}/chapters?page=${p}`, {
-          headers: {
-            'User-Agent': this.userAgent,
-            'Referer': `${this.baseUrl}/book/${slug}`,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-          },
-        });
+        const pageRes = await this.requestSafe(`${this.baseUrl}/book/${slug}/chapters?page=${p}`);
         const page$ = load(pageRes.data);
         page$('a').each((i, el) => {
           const href = page$(el).attr('href') || '';
@@ -204,14 +299,7 @@ class NovelFire extends LightNovelParser {
     };
 
     try {
-      const { data } = await this.client.get(`${this.baseUrl}/book/${cleanId}`, {
-        headers: {
-          'User-Agent': this.userAgent,
-          'Referer': `${this.baseUrl}/book/${cleanId.split('/')[0]}`,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-      });
+      const { data } = await this.requestSafe(`${this.baseUrl}/book/${cleanId}`);
 
       const $ = load(data);
 
