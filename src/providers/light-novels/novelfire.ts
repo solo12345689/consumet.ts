@@ -161,7 +161,8 @@ class NovelFire extends LightNovelParser {
         if (!id) return;
 
         const title = anchor.attr('title') || $(el).find('.novel-title').text().trim();
-        const cover = anchor.find('img').attr('src') || '';
+        const img = anchor.find('img');
+        const cover = img.attr('data-src') || img.attr('src') || '';
         
         result.results.push({
           id,
