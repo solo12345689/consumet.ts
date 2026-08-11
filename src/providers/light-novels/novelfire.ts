@@ -1,5 +1,4 @@
 import { load } from 'cheerio';
-import axios from 'axios';
 
 import {
   LightNovelParser,
@@ -28,8 +27,13 @@ class NovelFire extends LightNovelParser {
     const result: ISearch<ILightNovelResult> = { results: [] };
 
     try {
-      const { data } = await axios.get(`${this.baseUrl}/search?keyword=${encodeURIComponent(query)}`, {
-        headers: { 'User-Agent': this.userAgent },
+      const { data } = await this.client.get(`${this.baseUrl}/search?keyword=${encodeURIComponent(query)}`, {
+        headers: {
+          'User-Agent': this.userAgent,
+          'Referer': `${this.baseUrl}/`,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
       });
 
       const $ = load(data);
@@ -80,8 +84,13 @@ class NovelFire extends LightNovelParser {
     };
 
     try {
-      const { data } = await axios.get(`${this.baseUrl}/book/${slug}`, {
-        headers: { 'User-Agent': this.userAgent },
+      const { data } = await this.client.get(`${this.baseUrl}/book/${slug}`, {
+        headers: {
+          'User-Agent': this.userAgent,
+          'Referer': `${this.baseUrl}/`,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
       });
 
       const $ = load(data);
@@ -117,8 +126,13 @@ class NovelFire extends LightNovelParser {
 
       // Fetch the first page of chapters to determine pagination total
       const pageOneUrl = `${this.baseUrl}/book/${slug}/chapters?page=1`;
-      const pageOneRes = await axios.get(pageOneUrl, {
-        headers: { 'User-Agent': this.userAgent },
+      const pageOneRes = await this.client.get(pageOneUrl, {
+        headers: {
+          'User-Agent': this.userAgent,
+          'Referer': `${this.baseUrl}/book/${slug}`,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
       });
       const pageOne$ = load(pageOneRes.data);
 
@@ -135,8 +149,13 @@ class NovelFire extends LightNovelParser {
       // Fetch pages sequentially to avoid triggering 429 Rate Limiting blocks
       const chapters: ILightNovelChapter[] = [];
       for (let p = 1; p <= maxPage; p++) {
-        const pageRes = await axios.get(`${this.baseUrl}/book/${slug}/chapters?page=${p}`, {
-          headers: { 'User-Agent': this.userAgent },
+        const pageRes = await this.client.get(`${this.baseUrl}/book/${slug}/chapters?page=${p}`, {
+          headers: {
+            'User-Agent': this.userAgent,
+            'Referer': `${this.baseUrl}/book/${slug}`,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+          },
         });
         const page$ = load(pageRes.data);
         page$('a').each((i, el) => {
@@ -185,8 +204,13 @@ class NovelFire extends LightNovelParser {
     };
 
     try {
-      const { data } = await axios.get(`${this.baseUrl}/book/${cleanId}`, {
-        headers: { 'User-Agent': this.userAgent },
+      const { data } = await this.client.get(`${this.baseUrl}/book/${cleanId}`, {
+        headers: {
+          'User-Agent': this.userAgent,
+          'Referer': `${this.baseUrl}/book/${cleanId.split('/')[0]}`,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
       });
 
       const $ = load(data);
