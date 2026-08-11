@@ -15,7 +15,6 @@ export const PROVIDERS_LIST = {
     new MANGA.MangaHere(),
     new MANGA.MangaPill(),
     new MANGA.MangaDex(),
-    new MANGA.MangaReader(),
     new MANGA.MangaKakalot(),
     new MANGA.ComicK(),
   ],
@@ -23,7 +22,6 @@ export const PROVIDERS_LIST = {
   COMICS: [new COMICS.GetComics()],
   LIGHT_NOVELS: [],
   MOVIES: [
-    new MOVIES.DramaCool(),
     new MOVIES.FlixHQ(),
     new MOVIES.Goku(),
     new MOVIES.SFlix(),

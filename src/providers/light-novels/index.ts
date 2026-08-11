@@ -1,3 +1,5 @@
-import NovelUpdates from './novelupdates';
+import NovelBuddy from './novelbuddy';
+import Chikari from './chikari';
+import NovelFire from './novelfire';
 
-export default { NovelUpdates };
+export default { NovelBuddy, Chikari, NovelFire };
