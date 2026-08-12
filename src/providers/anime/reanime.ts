@@ -1,5 +1,6 @@
 import axios from 'axios';
 import crypto from 'crypto';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 import {
   AnimeParser,
@@ -17,6 +18,10 @@ class ReAnime extends AnimeParser {
   protected override baseUrl = 'https://reanime.to';
   protected override logo = 'https://reanime.to/assets/images/favicon/favicon.png';
   protected override classPath = 'ANIME.ReAnime';
+
+  private activeProxyAgent: any = null;
+  private proxiesList: string[] = [];
+  private lastProxyFetchTime = 0;
 
   private sha256hex(s: string): string {
     return crypto.createHash('sha256').update(s).digest('hex');
@@ -78,13 +83,132 @@ class ReAnime extends AnimeParser {
     throw new Error('SSR brace matching failed');
   }
 
+  private async getProxyAgent(): Promise<any> {
+    if (this.activeProxyAgent) return this.activeProxyAgent;
+
+    const now = Date.now();
+    if (this.proxiesList.length === 0 || now - this.lastProxyFetchTime > 300000) {
+      try {
+        const res = await axios.get('https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=US,DE,GB,CA&ssl=yes&anonymity=elite', { timeout: 6000 });
+        const proxies = res.data.split('\r\n').map((p: string) => p.trim()).filter(Boolean);
+        if (proxies.length > 0) {
+          this.proxiesList = proxies;
+          this.lastProxyFetchTime = now;
+        }
+      } catch (err) {
+        try {
+          const res = await axios.get('https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt', { timeout: 4000 });
+          const proxies = res.data.split('\n').map((p: string) => p.trim()).filter(Boolean);
+          if (proxies.length > 0) {
+            this.proxiesList = proxies;
+            this.lastProxyFetchTime = now;
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+
+    if (this.proxiesList.length > 0) {
+      const selectedProxy = this.proxiesList[Math.floor(Math.random() * Math.min(this.proxiesList.length, 30))];
+      const [host, port] = selectedProxy.split(':');
+      this.activeProxyAgent = {
+        agent: new HttpsProxyAgent(`http://${selectedProxy}`),
+        host,
+        port: parseInt(port)
+      };
+      return this.activeProxyAgent;
+    }
+    return null;
+  }
+
+  private async requestSafe(url: string, config: any = {}, method: 'get' | 'post' = 'get', postData?: any): Promise<any> {
+    const headers = {
+      ...config.headers,
+      'User-Agent': USER_AGENT,
+      'Referer': config.headers?.Referer || config.headers?.referer || `${this.baseUrl}/`,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    };
+
+    const makeRequest = async (agentInfo: any = null) => {
+      const axiosConfig: any = {
+        ...config,
+        headers,
+        method,
+        url,
+        data: postData,
+        timeout: method === 'post' ? 12000 : 8000,
+      };
+
+      if (agentInfo) {
+        axiosConfig.httpAgent = agentInfo.agent;
+        axiosConfig.httpsAgent = new (require('https').Agent)({ rejectUnauthorized: false });
+        axiosConfig.proxy = {
+          host: agentInfo.host,
+          port: agentInfo.port,
+        };
+      }
+
+      if (agentInfo) {
+        return await axios(axiosConfig);
+      } else {
+        // Direct request uses this.client
+        axiosConfig.timeout = 5000;
+        return await this.client(axiosConfig);
+      }
+    };
+
+    // If we have an active proxy that worked, try using it first
+    if (this.activeProxyAgent) {
+      try {
+        return await makeRequest(this.activeProxyAgent);
+      } catch (err) {
+        if (this.activeProxyAgent) {
+          const failedProxyStr = `${this.activeProxyAgent.host}:${this.activeProxyAgent.port}`;
+          this.proxiesList = this.proxiesList.filter(p => p !== failedProxyStr);
+        }
+        this.activeProxyAgent = null;
+      }
+    }
+
+    // Try direct connection first
+    try {
+      return await makeRequest(null);
+    } catch (err: any) {
+      const isBlockOrNetworkErr = 
+        err.response?.status === 403 || 
+        err.response?.status === 401 || 
+        err.response?.status === 502 || 
+        err.code === 'ECONNRESET' || 
+        err.code === 'ETIMEDOUT' || 
+        err.message?.toLowerCase().includes('timeout');
+
+      if (isBlockOrNetworkErr) {
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const proxyInfo = await this.getProxyAgent();
+          if (proxyInfo) {
+            try {
+              const res = await makeRequest(proxyInfo);
+              if (res.status === 200 || res.status === 201 || res.status === 204) {
+                // Success! Cache this working proxy
+                this.activeProxyAgent = proxyInfo;
+                return res;
+              }
+            } catch (proxyErr) {
+              const failedProxyStr = `${proxyInfo.host}:${proxyInfo.port}`;
+              this.proxiesList = this.proxiesList.filter(p => p !== failedProxyStr);
+              this.activeProxyAgent = null;
+            }
+          }
+        }
+      }
+      throw err;
+    }
+  }
+
   private async decryptFlixLink(linkUrl: string): Promise<any> {
-    const embedRes = await axios.get(linkUrl, {
-      headers: {
-        'User-Agent': USER_AGENT,
-        Referer: `${this.baseUrl}/`,
-      },
-    });
+    const embedRes = await this.requestSafe(linkUrl);
 
     const html = embedRes.data;
     const objStr = this.extractSsrObj(html);
@@ -101,12 +225,7 @@ class ReAnime extends AnimeParser {
 
     if (!token) throw new Error('Token field missing from embed data');
 
-    const tokenRes = await axios.get(`https://flixcloud.cc/api/m3u8/${token}`, {
-      headers: {
-        'User-Agent': USER_AGENT,
-        Referer: `${this.baseUrl}/`,
-      },
-    });
+    const tokenRes = await this.requestSafe(`https://flixcloud.cc/api/m3u8/${token}`);
     const tokData = tokenRes.data;
 
     const vidKey = this.sha256hex(token + 'vid').substring(0, 10);
@@ -114,39 +233,28 @@ class ReAnime extends AnimeParser {
     const v_bytes = this.rt(tokData[vidKey]);
     const T_bytes = this.rt(tokData[keyKey]);
 
-    const wasmOut = await this.runWasm(
-      data.w_payload,
+    const wasmB64 = data.wasm_b64;
+    const decryptedBytes = await this.runWasm(
+      wasmB64,
       frag1,
       kf2,
       T_bytes,
-      parseInt(seed.substring(0, 8), 16)
+      data.obfuscation_seed_int
     );
-    const pbk = crypto.pbkdf2Sync(wasmOut, seed, 1000, 32, 'sha256');
-    const r = Buffer.from(pbk);
-    for (let i = 0; i < 32; i++) r[i] ^= seed.charCodeAt(i % seed.length);
-    const aesKey = crypto.createHash('sha256').update(r).digest();
 
-    const decipher = crypto.createDecipheriv('aes-256-cbc', aesKey, iv);
-    const decryptedUrl = Buffer.concat([
-      decipher.update(v_bytes),
-      decipher.final(),
-    ]).toString('utf8').trim();
+    let k_string = '';
+    for (let i = 0; i < decryptedBytes.length; i++) {
+      k_string += String.fromCharCode(decryptedBytes[i] ^ iv[i % iv.length]);
+    }
 
-    return {
-      url: decryptedUrl,
-      subtitles: (data.subtitles || []).map((sub: any) => ({
-        url: sub.url,
-        lang: sub.language || 'English',
-        format: sub.format || 'vtt',
-      })),
-      thumbnails_vtt: data.thumbnails_vtt || null,
-      video_title: data.video_title || null,
-    };
+    const videoObj = JSON.parse(k_string);
+    return videoObj;
   }
 
   private extractAnilistId(anime: any): number | null {
-    if (anime.anilist_id && anime.anilist_id !== 0) return anime.anilist_id;
-    if (anime.anilist && anime.anilist !== 0) return anime.anilist;
+    if (!anime) return null;
+    const mappings = anime.mappings || {};
+    if (mappings.anilist_id) return parseInt(mappings.anilist_id);
 
     const coverUrl =
       anime.cover_image?.extra_large ||
@@ -159,8 +267,10 @@ class ReAnime extends AnimeParser {
 
   private async searchAnilistId(title: string): Promise<number | null> {
     try {
-      const res = await axios.post(
+      const res = await this.requestSafe(
         'https://graphql.anilist.co',
+        { headers: { 'Content-Type': 'application/json' } },
+        'post',
         {
           query: `
             query ($search: String) {
@@ -170,8 +280,7 @@ class ReAnime extends AnimeParser {
             }
           `,
           variables: { search: title }
-        },
-        { headers: { 'Content-Type': 'application/json' } }
+        }
       );
       return res.data?.data?.Media?.id || null;
     } catch (e) {
@@ -186,9 +295,7 @@ class ReAnime extends AnimeParser {
    */
   override search = async (query: string): Promise<ISearch<IAnimeResult>> => {
     try {
-      const res = await axios.get(`${this.baseUrl}/api/v1/search?q=${encodeURIComponent(query)}&limit=30`, {
-        headers: { 'User-Agent': USER_AGENT },
-      });
+      const res = await this.requestSafe(`${this.baseUrl}/api/v1/search?q=${encodeURIComponent(query)}&limit=30`);
       const results: IAnimeResult[] = (res.data.results || []).map((anime: any) => ({
         id: anime.anime_id,
         title: anime.title?.english || anime.title?.romaji || 'Unknown',
@@ -212,8 +319,8 @@ class ReAnime extends AnimeParser {
       const epUrl = `${this.baseUrl}/api/v1/anime/${id}/episodes?limit=2000`;
 
       const [metaRes, epRes] = await Promise.all([
-        axios.get(metaUrl, { headers: { 'User-Agent': USER_AGENT } }),
-        axios.get(epUrl, { headers: { 'User-Agent': USER_AGENT } }),
+        this.requestSafe(metaUrl),
+        this.requestSafe(epUrl),
       ]);
 
       const anime = metaRes.data.anime || {};
@@ -245,7 +352,6 @@ class ReAnime extends AnimeParser {
    * @returns Promise<ISource>
    */
   override fetchEpisodeSources = async (episodeId: string): Promise<ISource> => {
-    // episodeId is e.g. claymore-hyk87h/episode/1
     const parts = episodeId.split('/episode/');
     const slug = parts[0];
     const epNum = parseInt(parts[1] || '1');
@@ -253,9 +359,7 @@ class ReAnime extends AnimeParser {
     try {
       // 1. Fetch watch metadata to retrieve the anime object and Anilist ID
       const watchUrl = `${this.baseUrl}/api/v1/watch/${slug}?ep=${epNum}`;
-      const watchRes = await axios.get(watchUrl, {
-        headers: { 'User-Agent': USER_AGENT },
-      });
+      const watchRes = await this.requestSafe(watchUrl);
 
       const anime = watchRes.data.anime || {};
       let anilistId = this.extractAnilistId(anime);
@@ -271,9 +375,7 @@ class ReAnime extends AnimeParser {
       if (anilistId) {
         const flixUrl = `${this.baseUrl}/api/flix/${anilistId}/${epNum}`;
         try {
-          const flixRes = await axios.get(flixUrl, {
-            headers: { 'User-Agent': USER_AGENT },
-          });
+          const flixRes = await this.requestSafe(flixUrl);
           if (flixRes.data && flixRes.data.success) {
             servers = flixRes.data.servers || [];
           }
@@ -321,9 +423,7 @@ class ReAnime extends AnimeParser {
 
     try {
       const watchUrl = `${this.baseUrl}/api/v1/watch/${slug}?ep=${epNum}`;
-      const watchRes = await axios.get(watchUrl, {
-        headers: { 'User-Agent': USER_AGENT },
-      });
+      const watchRes = await this.requestSafe(watchUrl);
 
       const anime = watchRes.data.anime || {};
       let anilistId = this.extractAnilistId(anime);
@@ -338,9 +438,7 @@ class ReAnime extends AnimeParser {
       if (anilistId) {
         const flixUrl = `${this.baseUrl}/api/flix/${anilistId}/${epNum}`;
         try {
-          const flixRes = await axios.get(flixUrl, {
-            headers: { 'User-Agent': USER_AGENT },
-          });
+          const flixRes = await this.requestSafe(flixUrl);
           if (flixRes.data && flixRes.data.success) {
             servers = flixRes.data.servers || [];
           }
@@ -364,9 +462,7 @@ class ReAnime extends AnimeParser {
    */
   fetchSchedule = async (): Promise<any> => {
     try {
-      const res = await axios.get(`${this.baseUrl}/api/v1/schedule`, {
-        headers: { 'User-Agent': USER_AGENT },
-      });
+      const res = await this.requestSafe(`${this.baseUrl}/api/v1/schedule`);
       return res.data;
     } catch (e: any) {
       throw new Error(e.message);
@@ -379,9 +475,7 @@ class ReAnime extends AnimeParser {
    */
   fetchLatestEpisodes = async (): Promise<any> => {
     try {
-      const res = await axios.get(`${this.baseUrl}/api/v1/home/latest-aired`, {
-        headers: { 'User-Agent': USER_AGENT },
-      });
+      const res = await this.requestSafe(`${this.baseUrl}/api/v1/home/latest-aired`);
       return res.data;
     } catch (e: any) {
       throw new Error(e.message);
@@ -396,11 +490,8 @@ class ReAnime extends AnimeParser {
    */
   fetchTopAnime = async (period: string = 'week', limit: number = 20): Promise<any> => {
     try {
-      const res = await axios.get(
-        `${this.baseUrl}/api/v1/top/anime?period=${period}&limit=${limit}`,
-        {
-          headers: { 'User-Agent': USER_AGENT },
-        }
+      const res = await this.requestSafe(
+        `${this.baseUrl}/api/v1/top/anime?period=${period}&limit=${limit}`
       );
       return res.data;
     } catch (e: any) {
